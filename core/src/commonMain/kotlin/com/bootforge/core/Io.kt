@@ -23,5 +23,6 @@ expect fun fileExists(path: String): Boolean
 expect fun fileDelete(path: String): Boolean
 expect fun fileSize(path: String): Long
 expect fun createSymlink(linkPath: String, target: String): Boolean
+expect fun nowSeconds(): Long
 expect fun stdout(text: String)
 expect fun stderr(text: String)

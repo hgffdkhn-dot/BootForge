@@ -49,5 +49,7 @@ actual fun createSymlink(linkPath: String, target: String): Boolean = runCatchin
     true
 }.getOrDefault(false)
 
+actual fun nowSeconds(): Long = System.currentTimeMillis() / 1000
+
 actual fun stdout(text: String) = print(text)
 actual fun stderr(text: String) = System.err.print(text)

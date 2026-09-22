@@ -84,6 +84,14 @@ actual fun createSymlink(linkPath: String, target: String): Boolean {
     return symlink(target, linkPath) == 0
 }
 
+actual fun nowSeconds(): Long {
+    memScoped {
+        val t = alloc<time_tVar>()
+        time(t.ptr)
+        return t.value
+    }
+}
+
 actual fun stdout(text: String) = print(text)
 actual fun stderr(text: String) {
     // fputs 到 stderr

@@ -42,7 +42,7 @@ class Ramdisk(
     fun add(path: String, data: ByteArray, mode: Int = Cpio.MODE_FILE_EXE, uid: Int = 0, gid: Int = 0) {
         val clean = path.trim().trimStart('/')
         ensureDirs(clean)
-        val entry = Cpio.Entry(clean, mode, uid, gid, 1, System.currentTimeMillis() / 1000, data)
+        val entry = Cpio.Entry(clean, mode, uid, gid, 1, nowSeconds(), data)
         val idx = entries.indexOfFirst { it.name == clean }
         if (idx >= 0) entries[idx] = entry else entries.add(insertIndex(clean), entry)
     }
@@ -50,7 +50,7 @@ class Ramdisk(
     fun addDirectory(path: String, mode: Int = Cpio.MODE_DIR) {
         val clean = path.trim().trimStart('/')
         if (clean.isEmpty() || find(clean) != null) return
-        entries.add(insertIndex(clean), Cpio.Entry(clean, mode, 0, 0, 2, System.currentTimeMillis() / 1000))
+        entries.add(insertIndex(clean), Cpio.Entry(clean, mode, 0, 0, 2, nowSeconds()))
     }
 
     private fun ensureDirs(path: String) {
@@ -98,7 +98,7 @@ class Ramdisk(
     }
 }
 
-internal fun joinPath(dir: String, name: String): String {
+fun joinPath(dir: String, name: String): String {
     val d = dir.trimEnd('/')
     val n = name.trimStart('/')
     return if (d.isEmpty()) n else "$d/$n"

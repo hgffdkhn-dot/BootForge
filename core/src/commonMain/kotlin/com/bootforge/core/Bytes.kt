@@ -41,8 +41,8 @@ object Bytes {
 
     fun putCstr(buf: ByteArray, off: Int, value: String, max: Int) {
         val b = value.toByteArray(Charsets.UTF_8)
-        val n = minOf(b.size, max - 1)
-        System.arraycopy(b, 0, buf, off, n)
+        val n = minOf(b.size, max - 1, buf.size - off)
+        for (i in 0 until n) buf[off + i] = b[i]
     }
 
     fun align(v: Long, pageSize: Int): Long {

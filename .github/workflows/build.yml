@@ -6,11 +6,20 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      build_cli:
+        description: "是否构建命令行二进制（耗时较长）"
+        type: boolean
+        default: true
+
+env:
+  GRADLE: /opt/gradle-8.9/bin/gradle
 
 jobs:
   apk:
     name: Android APK
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
@@ -40,13 +49,13 @@ jobs:
           sudo ln -sf /opt/gradle-8.9/bin/gradle /usr/local/bin/gradle
           gradle --version | head -3
 
+      # 一次调用打两个包：只经历一次配置阶段，比两次调用快很多
       - name: Assemble
-        run: |
-          /opt/gradle-8.9/bin/gradle --no-daemon --stacktrace :app:assembleDebug
-          /opt/gradle-8.9/bin/gradle --no-daemon --stacktrace :app:assembleRelease
+        run: $GRADLE --console=plain :app:assembleDebug :app:assembleRelease
 
       - name: Collect
         run: |
+          set -e
           mkdir -p artifacts
           cp app/build/outputs/apk/debug/app-debug.apk artifacts/BootForge-debug.apk
           if [ -f app/build/outputs/apk/release/app-release-unsigned.apk ]; then
@@ -54,6 +63,7 @@ jobs:
           else
             cp app/build/outputs/apk/release/app-release.apk artifacts/BootForge-release.apk
           fi
+          ls -lh artifacts
 
       - uses: actions/upload-artifact@v4
         with:
@@ -64,6 +74,7 @@ jobs:
   cli-x64:
     name: CLI (linux-x86_64)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -72,6 +83,14 @@ jobs:
           java-version: "17"
           distribution: "temurin"
           cache: gradle
+
+      # Kotlin/Native 工具链（konan）约 1 GB，缓存后能省掉几分钟下载
+      - name: Cache Kotlin/Native toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('core/build.gradle.kts', 'cli/build.gradle.kts', 'gradle.properties') }}
+          restore-keys: konan-${{ runner.os }}-
 
       - name: Install Gradle 8.9
         run: |
@@ -82,11 +101,12 @@ jobs:
           fi
           sudo ln -sf /opt/gradle-8.9/bin/gradle /usr/local/bin/gradle
 
-      - name: Build static binary
-        run: /opt/gradle-8.9/bin/gradle --no-daemon --stacktrace :cli:linkBootforgeReleaseExecutableLinuxX64
+      - name: Build binary
+        run: $GRADLE --console=plain -PbootforgeStatic=false :cli:linkBootforgeReleaseExecutableLinuxX64
 
       - name: Collect
         run: |
+          set -e
           mkdir -p artifacts
           BIN=$(find cli/build -type f -name 'bootforge.kexe' | head -1)
           if [ -z "$BIN" ]; then
@@ -94,7 +114,6 @@ jobs:
           fi
           cp "$BIN" artifacts/bootforge-linux-x86_64
           chmod +x artifacts/bootforge-linux-x86_64
-          file artifacts/bootforge-linux-x86_64 || true
           ls -lh artifacts
 
       - uses: actions/upload-artifact@v4
@@ -105,31 +124,47 @@ jobs:
 
   cli-arm64:
     name: CLI (linux-aarch64 / Android)
-    runs-on: ubuntu-latest
+    # 公开仓库可用 GitHub 原生 ARM runner，比 QEMU 模拟快一个数量级
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq qemu-user-static
-          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes || true
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: gradle
 
-      - name: Build inside an aarch64 container
+      - name: Cache Kotlin/Native toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-arm64-${{ hashFiles('core/build.gradle.kts', 'cli/build.gradle.kts', 'gradle.properties') }}
+          restore-keys: |
+            konan-${{ runner.os }}-arm64-
+            konan-Linux-
+
+      - name: Install Gradle 8.9
         run: |
           set -e
-          docker run --rm --platform linux/arm64 -v "$PWD":/src -w /src arm64v8/ubuntu:22.04 bash -lc '
-            set -e
-            export DEBIAN_FRONTEND=noninteractive
-            apt-get update -qq
-            apt-get install -y -qq openjdk-17-jdk-headless unzip curl ca-certificates libc6-dev
-            if [ ! -x /opt/gradle-8.9/bin/gradle ]; then
-              curl -fsSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.9-bin.zip
-              unzip -q /tmp/gradle.zip -d /opt
-            fi
-            GRADLE=/opt/gradle-8.9/bin/gradle
-            $GRADLE --no-daemon --stacktrace :cli:linkBootforgeReleaseExecutableLinuxArm64
-          '
+          if [ ! -x /opt/gradle-8.9/bin/gradle ]; then
+            curl -fsSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.9-bin.zip
+            sudo unzip -q /tmp/gradle.zip -d /opt
+          fi
+          sudo ln -sf /opt/gradle-8.9/bin/gradle /usr/local/bin/gradle
+          gradle --version | head -3
+
+      # 优先静态链接（手机上必须），失败则退回动态链接
+      - name: Build static binary (aarch64)
+        run: |
+          set -e
+          if $GRADLE --console=plain -PbootforgeStatic=true :cli:linkBootforgeReleaseExecutableLinuxArm64; then
+            echo "静态链接成功"
+          else
+            echo "静态链接失败，退回动态链接"
+            $GRADLE --console=plain -PbootforgeStatic=false :cli:linkBootforgeReleaseExecutableLinuxArm64
+          fi
 
       - name: Collect
         run: |
@@ -141,6 +176,7 @@ jobs:
           fi
           cp "$BIN" artifacts/bootforge-linux-aarch64
           chmod +x artifacts/bootforge-linux-aarch64
+          file artifacts/bootforge-linux-aarch64 || true
           ls -lh artifacts
 
       - uses: actions/upload-artifact@v4
@@ -151,8 +187,9 @@ jobs:
 
   release:
     name: Publish release
-    needs: [apk, cli-x64]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [apk, cli-x64, cli-arm64]
+    if: always() && startsWith(github.ref, 'refs/tags/v') &&
+        needs.apk.result == 'success' && needs.cli-x64.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write

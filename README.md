@@ -67,7 +67,7 @@ bootforge patch  boot.img -o new.img            # 去掉 dm-verity / 强制加�
 
 特点：
 
-- **零依赖静态链接**，`-static` 编译，Android（bionic）上 `adb push` 后可直接执行，不需要 Termux 或任何运行时。
+- **零依赖静态链接**（arm64 产物默认 `-static`），Android（bionic）上 `adb push` 后可直接执行，不需要 Termux 或任何运行时。PC 上的 x86_64 产物默认动态链接；两者都可用 `-PbootforgeStatic=false` / `=true` 切换。
 - 全部算法自实现：LZ4、GZIP/DEFLATE、SHA-1、cpio，不链接 zlib，也不依赖 `java.*`。
 - 镜像按 offset+size 惰性读取，100 MB 的 boot.img 也不会把内存吃满。
 
@@ -87,7 +87,7 @@ adb shell chmod 755 /data/local/tmp/bootforge
 adb shell /data/local/tmp/bootforge info /dev/block/by-name/boot   # 或先 dd 出镜像
 ```
 
-> 若静态链接在你的环境失败，删掉 `cli/build.gradle.kts` 里的 `linkerOpts("-static")` 即可退回动态链接（PC 上可用，但手机上就不能直接跑了）。
+> 静态链接若报找不到 `-lxxx`，改用 `-PbootforgeStatic=false` 退回动态链接（PC 上照样可用，但手机上就不能直接跑了）。
 
 ## 目录结构
 
@@ -132,6 +132,20 @@ app/src/main/java/com/bootforge/
 3. **注入默认走追加模式**：原 ramdisk 流式解压 → 尾部拼接一个只含新文件的 cpio → 流式压缩写回临时文件。内核本来就支持串联解析多个 cpio，效果等同于塞进 ramdisk，而内存占用只有「新文件大小 + 1 MB 缓冲」。只有当你删除过 ramdisk 条目（或操作 vendor_boot 片段）时才退化为整包重建。
 
 LZ4 编解码也做了提速：解压时对不重叠的匹配段用 `System.arraycopy` 批量拷贝，压缩用定长 `IntArray` 哈希表 + 自建 `Sink`，避免 `ByteArrayOutputStream.write(Int)` 的开销。
+
+
+## 构建加速与日志可见性
+
+CI 里有几个设置专门针对"慢"和"看不到进度"：
+
+- **去掉 `--no-daemon`**：正是它导致 Gradle 打印 `single-use Daemon process will be forked` 并另起一次性守护进程。改用常驻守护进程后，同一 job 内的多次调用可复用编译缓存。
+- **`--console=plain`**：无 TTY 时禁用进度条转义序列，日志变成一行行任务名（`:app:compileDebugKotlin` 等），Actions 里能实时看到进度。同时 `gradle.properties` 里也设了 `org.gradle.console=plain`。
+- **一次调用打两个包**：`$GRADLE :app:assembleDebug :app:assembleRelease`，只经历一次配置阶段，比两次调用明显更快。
+- **缓存 Kotlin/Native 工具链**（`~/.konan`，约 1 GB），省掉每次重新下载的几分钟。
+- **`org.gradle.parallel` + `org.gradle.caching`**，并把 Gradle 堆从 2 GB 提到 4 GB。
+- **`cli-arm64` 跑在 `ubuntu-24.04-arm` 原生 ARM runner 上**（公开仓库可用），不再用 QEMU 模拟 + arm64 Docker 容器，aarch64 二进制的构建时间从几十分钟降到几分钟。
+
+> 若你的仓库是私有的（用不了 ARM runner），把 `cli-arm64` 的 `runs-on` 改回 `ubuntu-latest`，并参考 Git 历史里那版 QEMU + `arm64v8/ubuntu:22.04` 容器的写法。
 
 ## 已知限制
 
