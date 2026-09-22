@@ -71,10 +71,14 @@ jobs:
           path: artifacts/*
           if-no-files-found: error
 
-  cli-x64:
-    name: CLI (linux-x86_64)
+  cli:
+    # Kotlin/Native 是交叉编译器：在 x64 主机上可以直接产出 aarch64 二进制，
+    # 不需要 ARM runner，也不需要 QEMU。
+    # 注意：Kotlin 1.9.x 没有 linux-aarch64 版本的编译器预编译包
+    # （kotlin-native-prebuilt-linux-aarch64），所以不能在 ARM runner 上构建。
+    name: CLI (x86_64 + aarch64)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -92,58 +96,31 @@ jobs:
           key: konan-${{ runner.os }}-${{ hashFiles('core/build.gradle.kts', 'cli/build.gradle.kts', 'gradle.properties') }}
           restore-keys: konan-${{ runner.os }}-
 
-      - name: Install Gradle 8.9
+      # 兜底：直接从 GitHub Releases 拉取预编译包，解开到插件期望的目录
+      # （~/.konan/kotlin-native-prebuilt-linux-x86_64-<版本>），命中后插件就不再下载。
+      # 这一步只做"准备好工具链"，失败也不影响后续由插件自行下载。
+      - name: Prepare Kotlin/Native toolchain
         run: |
           set -e
-          if [ ! -x /opt/gradle-8.9/bin/gradle ]; then
-            curl -fsSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.9-bin.zip
-            sudo unzip -q /tmp/gradle.zip -d /opt
+          VER=1.9.24
+          DIR="$HOME/.konan/kotlin-native-prebuilt-linux-x86_64-$VER"
+          if [ -x "$DIR/bin/kotlinc-native" ]; then
+            echo "已有工具链: $DIR"
+          else
+            echo "预下载 konan $VER ..."
+            mkdir -p "$HOME/.konan"
+            if curl -fL --retry 3 --retry-delay 5 \
+                 -o /tmp/konan.tar.gz \
+                 "https://github.com/JetBrains/kotlin/releases/download/v$VER/kotlin-native-prebuilt-linux-x86_64-$VER.tar.gz"; then
+              tar -xzf /tmp/konan.tar.gz -C "$HOME/.konan"
+            else
+              echo "预下载失败，交给 Gradle 自行下载"
+            fi
           fi
-          sudo ln -sf /opt/gradle-8.9/bin/gradle /usr/local/bin/gradle
-
-      - name: Build binary
-        run: $GRADLE --console=plain -PbootforgeStatic=false :cli:linkBootforgeReleaseExecutableLinuxX64
-
-      - name: Collect
-        run: |
-          set -e
-          mkdir -p artifacts
-          BIN=$(find cli/build -type f -name 'bootforge.kexe' | head -1)
-          if [ -z "$BIN" ]; then
-            echo "未找到产物"; find cli/build -maxdepth 4 -type f | head -40; exit 1
+          if [ -x "$DIR/bin/kotlinc-native" ]; then
+            echo "KONAN_HOME=$DIR" >> "$GITHUB_ENV"
           fi
-          cp "$BIN" artifacts/bootforge-linux-x86_64
-          chmod +x artifacts/bootforge-linux-x86_64
-          ls -lh artifacts
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: bootforge-linux-x86_64
-          path: artifacts/*
-          if-no-files-found: error
-
-  cli-arm64:
-    name: CLI (linux-aarch64 / Android)
-    # 公开仓库可用 GitHub 原生 ARM runner，比 QEMU 模拟快一个数量级
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-java@v4
-        with:
-          java-version: "17"
-          distribution: "temurin"
-          cache: gradle
-
-      - name: Cache Kotlin/Native toolchain
-        uses: actions/cache@v4
-        with:
-          path: ~/.konan
-          key: konan-${{ runner.os }}-arm64-${{ hashFiles('core/build.gradle.kts', 'cli/build.gradle.kts', 'gradle.properties') }}
-          restore-keys: |
-            konan-${{ runner.os }}-arm64-
-            konan-Linux-
+          ls -1 "$HOME/.konan" || true
 
       - name: Install Gradle 8.9
         run: |
@@ -155,41 +132,55 @@ jobs:
           sudo ln -sf /opt/gradle-8.9/bin/gradle /usr/local/bin/gradle
           gradle --version | head -3
 
-      # 优先静态链接（手机上必须），失败则退回动态链接
-      - name: Build static binary (aarch64)
+      # 一次调用产出两个架构：只经历一次配置阶段，且共用同一份已下载的 konan
+      # 网络下载偶发失败，重试一次
+      - name: Build x86_64 + aarch64 binaries
         run: |
           set -e
-          if $GRADLE --console=plain -PbootforgeStatic=true :cli:linkBootforgeReleaseExecutableLinuxArm64; then
-            echo "静态链接成功"
-          else
-            echo "静态链接失败，退回动态链接"
-            $GRADLE --console=plain -PbootforgeStatic=false :cli:linkBootforgeReleaseExecutableLinuxArm64
-          fi
+          EXTRA=""
+          if [ -n "${KONAN_HOME:-}" ]; then EXTRA="-Pkotlin.native.home=$KONAN_HOME"; fi
+          for i in 1 2; do
+            echo "=== 第 $i 次构建 ==="
+            if $GRADLE --console=plain $EXTRA -PbootforgeStatic=false \
+                 :cli:linkBootforgeReleaseExecutableLinuxX64 \
+                 :cli:linkBootforgeReleaseExecutableLinuxArm64; then
+              exit 0
+            fi
+            echo "构建失败，15 秒后重试"
+            sleep 15
+          done
+          exit 1
 
       - name: Collect
         run: |
           set -e
           mkdir -p artifacts
-          BIN=$(find cli/build -type f -name 'bootforge.kexe' | head -1)
-          if [ -z "$BIN" ]; then
-            echo "未找到产物"; find cli/build -maxdepth 4 -type f | head -40; exit 1
+
+          X64=$(find cli/build -path '*linuxX64*' -type f -name 'bootforge.kexe' | head -1)
+          ARM=$(find cli/build -path '*linuxArm64*' -type f -name 'bootforge.kexe' | head -1)
+
+          if [ -z "$X64" ] || [ -z "$ARM" ]; then
+            echo "产物不完整: x64='$X64' arm64='$ARM'"
+            find cli/build -maxdepth 5 -type f -name '*.kexe' | head -20
+            exit 1
           fi
-          cp "$BIN" artifacts/bootforge-linux-aarch64
-          chmod +x artifacts/bootforge-linux-aarch64
+
+          cp "$X64" artifacts/bootforge-linux-x86_64
+          cp "$ARM" artifacts/bootforge-linux-aarch64
+          chmod +x artifacts/bootforge-*
           file artifacts/bootforge-linux-aarch64 || true
           ls -lh artifacts
 
       - uses: actions/upload-artifact@v4
         with:
-          name: bootforge-linux-aarch64
+          name: bootforge-cli
           path: artifacts/*
           if-no-files-found: error
 
   release:
     name: Publish release
-    needs: [apk, cli-x64, cli-arm64]
-    if: always() && startsWith(github.ref, 'refs/tags/v') &&
-        needs.apk.result == 'success' && needs.cli-x64.result == 'success'
+    needs: [apk, cli]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -73,10 +73,10 @@ bootforge patch  boot.img -o new.img            # 去掉 dm-verity / 强制加�
 
 ### 获取二进制
 
-推到 GitHub 后，Actions 会产出两个 artifact：
+推到 GitHub 后，Actions 的 `bootforge-cli` 这个 artifact 里包含两个二进制：
 
 - `bootforge-linux-x86_64`（x64 Linux 主机）
-- `bootforge-linux-aarch64`（aarch64，手机直接跑；在 QEMU + arm64 容器里原生编译）
+- `bootforge-linux-aarch64`（aarch64，手机直接跑）
 
 下载后：
 
@@ -143,9 +143,9 @@ CI 里有几个设置专门针对"慢"和"看不到进度"：
 - **一次调用打两个包**：`$GRADLE :app:assembleDebug :app:assembleRelease`，只经历一次配置阶段，比两次调用明显更快。
 - **缓存 Kotlin/Native 工具链**（`~/.konan`，约 1 GB），省掉每次重新下载的几分钟。
 - **`org.gradle.parallel` + `org.gradle.caching`**，并把 Gradle 堆从 2 GB 提到 4 GB。
-- **`cli-arm64` 跑在 `ubuntu-24.04-arm` 原生 ARM runner 上**（公开仓库可用），不再用 QEMU 模拟 + arm64 Docker 容器，aarch64 二进制的构建时间从几十分钟降到几分钟。
+- **x86_64 与 aarch64 在同一个 job 里交叉编译产出**：Kotlin/Native 本身就是交叉编译器，在 x64 主机上直接链接 linuxArm64 二进制，既不需要 ARM runner 也不需要 QEMU，只经历一次配置阶段、共用一份 konan 工具链。
 
-> 若你的仓库是私有的（用不了 ARM runner），把 `cli-arm64` 的 `runs-on` 改回 `ubuntu-latest`，并参考 Git 历史里那版 QEMU + `arm64v8/ubuntu:22.04` 容器的写法。
+> 不要在 ARM runner（`ubuntu-24.04-arm`）上构建：Kotlin 1.9.x 没有发布 `kotlin-native-prebuilt-linux-aarch64`，会直接报 `Could not find :kotlin-native-prebuilt-linux-aarch64`。交叉编译是唯一且更快的路子。
 
 ## 已知限制
 
