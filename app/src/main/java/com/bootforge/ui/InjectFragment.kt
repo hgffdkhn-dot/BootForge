@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.bootforge.R
 import com.bootforge.core.Format
 import com.bootforge.databinding.FragmentInjectBinding
 import com.bootforge.vm.InjectItem

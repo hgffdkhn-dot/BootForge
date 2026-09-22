@@ -50,8 +50,21 @@ jobs:
           gradle --version | head -3
 
       # 一次调用打两个包：只经历一次配置阶段，比两次调用快很多
+      # 失败时把所有 e: 开头的编译错误集中打印到日志最前面，方便直接复制
       - name: Assemble
-        run: $GRADLE --console=plain :app:assembleDebug :app:assembleRelease
+        run: |
+          set +e
+          $GRADLE --console=plain :app:assembleDebug :app:assembleRelease 2>&1 | tee /tmp/build.log
+          RC=${PIPESTATUS[0]}
+          if [ "$RC" -ne 0 ]; then
+            echo ""
+            echo "===================== 编译错误汇总 ====================="
+            grep -E '^e: ' /tmp/build.log | sort -u
+            echo "===================== What went wrong ====================="
+            sed -n '/What went wrong/,/^\* Try/p' /tmp/build.log | head -40
+            echo "=========================================================="
+            exit "$RC"
+          fi
 
       - name: Collect
         run: |
