@@ -96,9 +96,11 @@ object Dtb {
                         val value = data.copyOfRange(p, p + len)
                         if (depth == 1) {
                             when (propName) {
-                                "model" -> model = String(value).trimEnd('\u0000')
-                                "compatible" -> compatible = value.split('\u0000')
-                                    .filter { it.isNotEmpty() }.joinToString(", ")
+                                "model" -> model = String(value, Charsets.UTF_8).trimEnd('\u0000')
+                                "compatible" -> compatible = String(value, Charsets.UTF_8)
+                                    .split('\u0000')
+                                    .filter { it.isNotEmpty() }
+                                    .joinToString(", ")
                             }
                         }
                         p += len

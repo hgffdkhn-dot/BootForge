@@ -27,9 +27,11 @@ class HomeFragment : Fragment() {
 
     private val pickImage = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@registerForActivityResult
-        requireContext().contentResolver.takePersistableUriPermission(
-            uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-        )
+        runCatching {
+            requireContext().contentResolver.takePersistableUriPermission(
+                uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
         vm.importImage(uri, nameOf(uri))
     }
 

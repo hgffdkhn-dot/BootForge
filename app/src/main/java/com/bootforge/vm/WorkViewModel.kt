@@ -103,7 +103,7 @@ class WorkViewModel(app: Application) : AndroidViewModel(app) {
         log("镜像大小 ${data.size} 字节，魔数偏移 ${img.magicOffset}")
         loadRamdisk(img, 0)
         meta.postValue(
-            Meta(name, data.size, if (img.isVendorBoot()) "vendor_boot" else "boot", "v${img.headerVersion}")
+            Meta(name, data.size.toLong(), if (img.isVendorBoot()) "vendor_boot" else "boot", "v${img.headerVersion}")
         )
         infoRows.postValue(buildInfo(img))
         lastOutput.postValue(null)
@@ -119,10 +119,14 @@ class WorkViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun loadRamdisk(img: BootImage, index: Int) {
-        val payload = if (img.isVendorBoot()) {
-            img.fragments.getOrNull(index)?.data ?: ByteArray(0)
-        } else img.ramdisk
-        ramdisk = if (payload == null || payload.isEmpty()) null else try {
+        val payload: ByteArray? = if (img.isVendorBoot()) {
+            img.fragments.getOrNull(index)?.data
+        } else {
+            img.ramdisk
+        }
+        ramdisk = if (payload == null || payload.isEmpty()) {
+            null
+        } else try {
             Ramdisk.fromImage(payload)
         } catch (e: Exception) {
             log("ramdisk 解析失败：${e.message}")

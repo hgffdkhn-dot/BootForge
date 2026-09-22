@@ -5,7 +5,7 @@ package com.bootforge.core
  */
 object Patcher {
 
-    data class Result(val files: Int, val notes: MutableList<String> = ArrayList())
+    data class Result(var files: Int, val notes: MutableList<String> = ArrayList())
 
     /**
      * @param keepVerity        true  -> 保留 dm-verity（不打补丁）

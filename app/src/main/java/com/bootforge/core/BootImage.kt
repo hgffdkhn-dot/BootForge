@@ -68,7 +68,7 @@ class BootImage {
                 img.osVersion = Bytes.get32(data, base + 0x10)
                 img.headerSizeField = Bytes.get32(data, base + 0x14)
                 img.cmdline = Bytes.cstr(data, base + 0x2C, 1536)
-                val sigSize = if (ver >= 4) Bytes.get32(data, base + 1580) else 0
+                val sigSize = if (ver >= 4) Bytes.get32(data, base + 1580) else 0L
                 var pos = base.toLong() + img.pageSize
                 img.kernel = slice(data, pos, kernelSize)
                 pos += Bytes.align(kernelSize, img.pageSize)
@@ -276,7 +276,7 @@ class BootImage {
         Bytes.put32(hdr, 0x1C, secondAddr)
         Bytes.put32(hdr, 0x20, tagsAddr)
         Bytes.put32(hdr, 0x24, pageSize.toLong())
-        Bytes.put32(hdr, 0x28, if (headerVersion >= 1) headerVersion.toLong() else 0)
+        Bytes.put32(hdr, 0x28, if (headerVersion >= 1) headerVersion.toLong() else 0L)
         Bytes.put32(hdr, 0x2C, osVersion)
         Bytes.putCstr(hdr, 0x30, boardName, 16)
         writeCmdlineSplit(hdr)
@@ -348,7 +348,7 @@ class BootImage {
             Bytes.put32(hdr, 2112, tableBlob.size.toLong())
             Bytes.put32(hdr, 2116, fragments.size.toLong())
             Bytes.put32(hdr, 2120, TABLE_ENTRY_SIZE.toLong())
-            Bytes.put32(hdr, 2124, bootconfig?.size?.toLong() ?: 0)
+            Bytes.put32(hdr, 2124, bootconfig?.size?.toLong() ?: 0L)
         }
         val out = ByteArrayOutputStream()
         out.write(hdr, 0, hdr.size)

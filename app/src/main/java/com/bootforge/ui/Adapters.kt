@@ -48,13 +48,19 @@ class InjectAdapter(
         notifyDataSetChanged()
     }
 
-    class Holder(val binding: ItemInjectBinding) : RecyclerView.ViewHolder(binding.root)
+    class Holder(val binding: ItemInjectBinding) : RecyclerView.ViewHolder(binding.root) {
+        var watcher: TextWatcher? = null
+    }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder =
         Holder(ItemInjectBinding.inflate(LayoutInflater.from(parent.context), parent, false))
 
     override fun onBindViewHolder(holder: Holder, position: Int) {
         val item = items[position]
+        holder.watcher?.let {
+            holder.binding.etPath.removeTextChangedListener(it)
+            holder.binding.etMode.removeTextChangedListener(it)
+        }
         holder.binding.tvName.text = item.name
         holder.binding.etPath.setText(item.target)
         holder.binding.etMode.setText(item.mode)
@@ -67,6 +73,7 @@ class InjectAdapter(
                 onChanged(item, holder.binding.etPath.text.toString(), holder.binding.etMode.text.toString())
             }
         }
+        holder.watcher = watcher
         holder.binding.etPath.addTextChangedListener(watcher)
         holder.binding.etMode.addTextChangedListener(watcher)
     }
