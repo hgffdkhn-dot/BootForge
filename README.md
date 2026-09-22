@@ -55,7 +55,7 @@ gradle :app:assembleDebug
 
 ## 命令行工具 bootforge（CLI）
 
-`core/` 与 `cli/` 组成了一个 **Kotlin/Native 静态二进制**，用法对齐 magiskboot：
+`native/` 是一个**纯 C 实现**，用法对齐 magiskboot：
 
 ```bash
 bootforge info   boot.img                       # 分析头部 / 各段 / cmdline / 补丁级别
@@ -65,44 +65,53 @@ bootforge inject boot.img -o new.img mytool=system/bin/mytool:0755
 bootforge patch  boot.img -o new.img            # 去掉 dm-verity / 强制加密
 ```
 
-特点：
+**为什么是 C 而不是 Kotlin/Native**：Kotlin/Native 每次构建要先从 JetBrains 下载约 1 GB 的
+konan 工具链，且 1.9.x 没有 aarch64 版本的预编译包，在 CI 上非常脆弱。改成 C 之后：
 
-- **零依赖静态链接**（arm64 产物默认 `-static`），Android（bionic）上 `adb push` 后可直接执行，不需要 Termux 或任何运行时。PC 上的 x86_64 产物默认动态链接；两者都可用 `-PbootforgeStatic=false` / `=true` 切换。
-- 全部算法自实现：LZ4、GZIP/DEFLATE、SHA-1、cpio，不链接 zlib，也不依赖 `java.*`。
-- 镜像按 offset+size 惰性读取，100 MB 的 boot.img 也不会把内存吃满。
+- 编译**几十秒**完成，二进制只有 **60 KB**；
+- 用 Android NDK 的 clang **静态链接**，产出可直接 `adb push` 到手机执行（跟 magiskboot 完全一样的路子）；
+- 零依赖：LZ4、GZIP/DEFLATE、SHA-1、cpio 全部手写，不链接 zlib；
+- 镜像按 offset+size 惰性读取，100 MB 的 boot.img 也不会吃满内存。
 
-### 获取二进制
-
-推到 GitHub 后，Actions 的 `bootforge-cli` 这个 artifact 里包含两个二进制：
-
-- `bootforge-linux-x86_64`（x64 Linux 主机）
-- `bootforge-linux-aarch64`（aarch64，手机直接跑）
-
-下载后：
+### 本地构建
 
 ```bash
-chmod +x bootforge-linux-aarch64
-adb push bootforge-linux-aarch64 /data/local/tmp/bootforge
-adb shell chmod 755 /data/local/tmp/bootforge
-adb shell /data/local/tmp/bootforge info /dev/block/by-name/boot   # 或先 dd 出镜像
+cd native
+make              # 用系统 gcc，产出 build/bootforge
+make static       # 静态链接
+make android ANDROID_NDK_HOME=/path/to/ndk   # aarch64 静态二进制
+make android-arm ANDROID_NDK_HOME=/path/to/ndk
+sh test/run.sh    # 端到端自检：造镜像 → info → unpack → repack → inject → patch
 ```
 
-> 静态链接若报找不到 `-lxxx`，改用 `-PbootforgeStatic=false` 退回动态链接（PC 上照样可用，但手机上就不能直接跑了）。
+### 从 GitHub Actions 获取
+
+`bootforge-cli` 这个 artifact 里有三个二进制：
+
+- `bootforge-linux-x86_64`（x64 Linux 主机）
+- `bootforge-android-aarch64`（绝大多数安卓手机）
+- `bootforge-android-armv7`（老设备）
+
+手机上用法：
+
+```bash
+adb push bootforge-android-aarch64 /data/local/tmp/bootforge
+adb shell chmod 755 /data/local/tmp/bootforge
+adb shell /data/local/tmp/bootforge info /dev/block/by-name/boot
+```
 
 ## 目录结构
 
 ```
-core/                          # Kotlin Multiplatform：CLI 与（未来）App 共用的实现
-├── src/commonMain/.../core/   # 纯 Kotlin，无 java.* 依赖
-│   ├── BootImage.kt           # boot / vendor_boot 解析与重建（v0–v4）
-│   ├── Lz4.kt / Gzip.kt       # 自实现的压缩编解码
-│   ├── Sha1.kt / Cpio.kt      # 自实现的哈希与 cpio newc
-│   └── Io.kt                  # expect/actual：JVM 用 java.io，Native 用 POSIX
-├── src/nativeMain/.../Io.native.kt
-└── src/jvmMain/.../Io.jvm.kt
-
-cli/                           # Kotlin/Native 可执行文件
-└── src/nativeMain/.../Main.kt # 命令行入口（info / unpack / repack / inject / patch）
+native/                        # 纯 C 的命令行工具（magiskboot 式）
+├── Makefile                   # 本地 gcc / NDK 交叉编译
+├── src/bootforge.h            # 公共声明
+├── src/bootimg.c              # boot / vendor_boot 解析与重建（v0–v4）
+├── src/lz4.c / gzip.c         # 自实现的压缩编解码
+├── src/sha1 / cpio.c          # 自实现的哈希与 cpio newc
+├── src/patcher.c              # fstab 去 dm-verity / 强制加密
+├── src/main.c                 # CLI 入口
+└── test/                      # 端到端自检
 
 app/src/main/java/com/bootforge/
 ├── BootForgeApp.kt            # 应用入口，启用 Material You 动态取色

@@ -26,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           java-version: "17"
           distribution: "temurin"
@@ -72,104 +72,61 @@ jobs:
           if-no-files-found: error
 
   cli:
-    # Kotlin/Native 是交叉编译器：在 x64 主机上可以直接产出 aarch64 二进制，
-    # 不需要 ARM runner，也不需要 QEMU。
-    # 注意：Kotlin 1.9.x 没有 linux-aarch64 版本的编译器预编译包
-    # （kotlin-native-prebuilt-linux-aarch64），所以不能在 ARM runner 上构建。
-    name: CLI (x86_64 + aarch64)
+    # 纯 C 实现，用 NDK 交叉编译成静态二进制，跟 magiskboot 一样的路子。
+    # 不需要下载 1 GB 的 Kotlin/Native 工具链，全程几十秒。
+    name: CLI (x86_64 + aarch64 + armv7)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 15
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
-        with:
-          java-version: "17"
-          distribution: "temurin"
-          cache: gradle
+      - name: Build for this host (x86_64, static)
+        working-directory: native
+        run: make static
 
-      # Kotlin/Native 工具链（konan）约 1 GB，缓存后能省掉几分钟下载
-      - name: Cache Kotlin/Native toolchain
-        uses: actions/cache@v4
-        with:
-          path: ~/.konan
-          key: konan-${{ runner.os }}-${{ hashFiles('core/build.gradle.kts', 'cli/build.gradle.kts', 'gradle.properties') }}
-          restore-keys: konan-${{ runner.os }}-
-
-      # 兜底：直接从 GitHub Releases 拉取预编译包，解开到插件期望的目录
-      # （~/.konan/kotlin-native-prebuilt-linux-x86_64-<版本>），命中后插件就不再下载。
-      # 这一步只做"准备好工具链"，失败也不影响后续由插件自行下载。
-      - name: Prepare Kotlin/Native toolchain
+      - name: Smoke test on host
+        working-directory: native
         run: |
           set -e
-          VER=1.9.24
-          DIR="$HOME/.konan/kotlin-native-prebuilt-linux-x86_64-$VER"
-          if [ -x "$DIR/bin/kotlinc-native" ]; then
-            echo "已有工具链: $DIR"
-          else
-            echo "预下载 konan $VER ..."
-            mkdir -p "$HOME/.konan"
-            if curl -fL --retry 3 --retry-delay 5 \
-                 -o /tmp/konan.tar.gz \
-                 "https://github.com/JetBrains/kotlin/releases/download/v$VER/kotlin-native-prebuilt-linux-x86_64-$VER.tar.gz"; then
-              tar -xzf /tmp/konan.tar.gz -C "$HOME/.konan"
-            else
-              echo "预下载失败，交给 Gradle 自行下载"
-            fi
-          fi
-          if [ -x "$DIR/bin/kotlinc-native" ]; then
-            echo "KONAN_HOME=$DIR" >> "$GITHUB_ENV"
-          fi
-          ls -1 "$HOME/.konan" || true
+          mkdir -p build
+          sh test/run.sh
 
-      - name: Install Gradle 8.9
+      - name: Collect x86_64
         run: |
-          set -e
-          if [ ! -x /opt/gradle-8.9/bin/gradle ]; then
-            curl -fsSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.9-bin.zip
-            sudo unzip -q /tmp/gradle.zip -d /opt
-          fi
-          sudo ln -sf /opt/gradle-8.9/bin/gradle /usr/local/bin/gradle
-          gradle --version | head -3
-
-      # 一次调用产出两个架构：只经历一次配置阶段，且共用同一份已下载的 konan
-      # 网络下载偶发失败，重试一次
-      - name: Build x86_64 + aarch64 binaries
-        run: |
-          set -e
-          EXTRA=""
-          if [ -n "${KONAN_HOME:-}" ]; then EXTRA="-Pkotlin.native.home=$KONAN_HOME"; fi
-          for i in 1 2; do
-            echo "=== 第 $i 次构建 ==="
-            if $GRADLE --console=plain $EXTRA -PbootforgeStatic=false \
-                 :cli:linkBootforgeReleaseExecutableLinuxX64 \
-                 :cli:linkBootforgeReleaseExecutableLinuxArm64; then
-              exit 0
-            fi
-            echo "构建失败，15 秒后重试"
-            sleep 15
-          done
-          exit 1
-
-      - name: Collect
-        run: |
-          set -e
           mkdir -p artifacts
+          cp native/build/bootforge artifacts/bootforge-linux-x86_64
+          chmod +x artifacts/bootforge-linux-x86_64
 
-          X64=$(find cli/build -path '*linuxX64*' -type f -name 'bootforge.kexe' | head -1)
-          ARM=$(find cli/build -path '*linuxArm64*' -type f -name 'bootforge.kexe' | head -1)
+      - name: Install Android NDK
+        run: |
+          set -e
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.0.12077973" | tail -3
 
-          if [ -z "$X64" ] || [ -z "$ARM" ]; then
-            echo "产物不完整: x64='$X64' arm64='$ARM'"
-            find cli/build -maxdepth 5 -type f -name '*.kexe' | head -20
-            exit 1
-          fi
+      - name: Cross compile aarch64 (Android, static)
+        working-directory: native
+        run: make android ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973
 
-          cp "$X64" artifacts/bootforge-linux-x86_64
-          cp "$ARM" artifacts/bootforge-linux-aarch64
-          chmod +x artifacts/bootforge-*
-          file artifacts/bootforge-linux-aarch64 || true
-          ls -lh artifacts
+      - name: Collect aarch64
+        run: |
+          set -e
+          cp native/build/bootforge artifacts/bootforge-android-aarch64
+          chmod +x artifacts/bootforge-android-aarch64
+          file artifacts/bootforge-android-aarch64 || true
+
+      - name: Cross compile armv7 (Android, static)
+        working-directory: native
+        run: make android-arm ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973
+
+      - name: Collect armv7
+        run: |
+          set -e
+          cp native/build/bootforge artifacts/bootforge-android-armv7
+          chmod +x artifacts/bootforge-android-armv7
+          file artifacts/bootforge-android-armv7 || true
 
       - uses: actions/upload-artifact@v4
         with:
