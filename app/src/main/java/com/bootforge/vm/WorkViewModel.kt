@@ -9,6 +9,7 @@ import com.bootforge.core.BootImage
 import com.bootforge.core.Compress
 import com.bootforge.core.Cpio
 import com.bootforge.core.Dtb
+import com.bootforge.core.FileImageSource
 import com.bootforge.core.Format
 import com.bootforge.core.Patcher
 import com.bootforge.core.Ramdisk
@@ -80,7 +81,12 @@ class WorkViewModel(app: Application) : AndroidViewModel(app) {
             result.onSuccess {
                 postStatus("$task 完成")
             }.onFailure { e ->
-                val msg = e.message ?: e.javaClass.simpleName
+                val raw = e.message ?: e.javaClass.simpleName
+                val msg = if (e is OutOfMemoryError || raw.contains("OutOfMemory", true) ||
+                    raw.contains("Failed to allocate", true)
+                ) {
+                    "内存不足：镜像过大，请只解包需要的段，或在注入前先删除不用的 ramdisk 条目"
+                } else raw
                 postStatus("$task 失败：$msg")
                 message.postValue(msg)
             }
@@ -95,15 +101,17 @@ class WorkViewModel(app: Application) : AndroidViewModel(app) {
         getApplication<Application>().contentResolver.openInputStream(uri)?.use { input ->
             dest.outputStream().use { input.copyTo(it) }
         } ?: error("无法读取所选文件")
-        val data = dest.readBytes()
-        val img = BootImage.parse(data)
+        image?.close()
+        val src = FileImageSource(dest)
+        val img = BootImage.parse(src)
         image = img
         sourceName = name
         targetIndex = 0
-        log("镜像大小 ${data.size} 字节，魔数偏移 ${img.magicOffset}")
+        log("镜像大小 ${dest.length()} 字节，魔数偏移 ${img.magicOffset}")
+        if (img.isVendorBoot()) img.loadFragments()
         loadRamdisk(img, 0)
         meta.postValue(
-            Meta(name, data.size.toLong(), if (img.isVendorBoot()) "vendor_boot" else "boot", "v${img.headerVersion}")
+            Meta(name, dest.length(), if (img.isVendorBoot()) "vendor_boot" else "boot", "v${img.headerVersion}")
         )
         infoRows.postValue(buildInfo(img))
         lastOutput.postValue(null)
@@ -122,12 +130,15 @@ class WorkViewModel(app: Application) : AndroidViewModel(app) {
         val payload: ByteArray? = if (img.isVendorBoot()) {
             img.fragments.getOrNull(index)?.data
         } else {
-            img.ramdisk
+            img.readRamdisk()
         }
         ramdisk = if (payload == null || payload.isEmpty()) {
             null
         } else try {
             Ramdisk.fromImage(payload)
+        } catch (e: OutOfMemoryError) {
+            log("ramdisk 过大（${payload.size} 字节），内存不足，已跳过解析（镜像本身仍可重新打包）")
+            null
         } catch (e: Exception) {
             log("ramdisk 解析失败：${e.message}")
             null
@@ -180,9 +191,11 @@ class WorkViewModel(app: Application) : AndroidViewModel(app) {
                 rows += "  片段 $i" to "${f.name} · ${typeName(f.type)} · ${f.data.size} 字节"
             }
             rows += "dtb" to "${img.dtbSize} 字节"
-            if (img.bootconfig?.isNotEmpty() == true) rows += "bootconfig" to "${img.bootconfig!!.size} 字节"
+            if (img.has(BootImage.Part.BOOTCONFIG)) {
+                rows += "bootconfig" to "${img.sizeOf(BootImage.Part.BOOTCONFIG)} 字节"
+            }
         }
-        val dtbTarget = img.dtb
+        val dtbTarget = img.readPart(BootImage.Part.DTB)
         if (dtbTarget != null && dtbTarget.isNotEmpty()) {
             val blobs = Dtb.parse(dtbTarget)
             rows += "DTB 数量" to "${blobs.size}"
@@ -202,16 +215,9 @@ class WorkViewModel(app: Application) : AndroidViewModel(app) {
         val dir = File(outDir, sourceName.substringBeforeLast('.') + "_unpacked")
         if (dir.exists()) dir.deleteRecursively()
         dir.mkdirs()
-        img.kernel?.takeIf { it.isNotEmpty() }?.let {
-            File(dir, "kernel").writeBytes(it)
-            log("写出 kernel：${it.size} 字节")
+        img.extractParts(dir).forEach { f ->
+            log("写出 ${f.name}：${f.length()} 字节")
         }
-        img.second?.takeIf { it.isNotEmpty() }?.let { File(dir, "second.img").writeBytes(it) }
-        img.recoveryDtbo?.takeIf { it.isNotEmpty() }?.let { File(dir, "recovery_dtbo.img").writeBytes(it) }
-        img.dtb?.takeIf { it.isNotEmpty() }?.let { File(dir, "dtb.img").writeBytes(it) }
-        img.signature?.takeIf { it.isNotEmpty() }?.let { File(dir, "boot_signature").writeBytes(it) }
-        img.bootconfig?.takeIf { it.isNotEmpty() }?.let { File(dir, "bootconfig").writeBytes(it) }
-        img.vendorRamdiskTable?.takeIf { it.isNotEmpty() }?.let { File(dir, "vendor_ramdisk_table.bin").writeBytes(it) }
 
         if (img.isVendorBoot()) {
             img.fragments.forEach { f ->
@@ -220,7 +226,8 @@ class WorkViewModel(app: Application) : AndroidViewModel(app) {
                 runCatching { Ramdisk.fromImage(f.data).extractTo(File(dir, "vendor_ramdisk_$safe")) }
             }
         } else {
-            img.ramdisk?.takeIf { it.isNotEmpty() }?.let { rd ->
+            val rd = img.readRamdisk()
+            if (rd != null && rd.isNotEmpty()) {
                 File(dir, "ramdisk${extOf(rd)}").writeBytes(rd)
                 val raw = Compress.decompress(rd, Compress.detect(rd))
                 File(dir, "ramdisk.cpio").writeBytes(raw)
@@ -271,7 +278,7 @@ class WorkViewModel(app: Application) : AndroidViewModel(app) {
                 if (targetIndex !in img.fragments.indices) error("ramdisk 目标无效")
                 img.fragments[targetIndex].data = bytes
             } else {
-                img.ramdisk = bytes
+                img.setRamdisk(bytes)
             }
             log("ramdisk 重新打包：${bytes.size} 字节（${options.format.label}）")
         }
@@ -279,13 +286,12 @@ class WorkViewModel(app: Application) : AndroidViewModel(app) {
             Patcher.appendCmdline(img, options.extraCmdline)
             log("追加 cmdline：${options.extraCmdline.trim()}")
         }
-        val packed = img.pack()
         val name = sourceName.substringBeforeLast('.') + suffix + ".img"
         val out = File(outDir, name)
-        out.writeBytes(packed)
+        img.packTo(out)
         lastOutput.postValue(out)
         infoRows.postValue(buildInfo(img))
-        log("输出：${out.path}（${packed.size} 字节）")
+        log("输出：${out.path}（${out.length()} 字节）")
         message.postValue("已生成 ${out.name}")
         return out.path
     }

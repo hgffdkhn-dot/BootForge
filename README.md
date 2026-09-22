@@ -71,6 +71,12 @@ app/src/main/java/com/bootforge/
 └── util/LogBus.kt             # 日志
 ```
 
+## 大镜像与内存
+
+镜像不再整体载入内存：只读取 4 KB 头部，kernel / ramdisk / dtb 等段按偏移量**流式**读写，重新打包也是边读边写。同时应用声明了 `android:largeHeap`。因此 64 MB 以上的 boot / init_boot 也能正常导入。
+
+真正会占用内存的是 ramdisk 本身（解压后的 cpio 条目），若极端精简的设备上仍报内存不足，日志会给出提示，此时建议只做「重新打包 + 修补」，避免一次性解包整个文件树。
+
 ## 已知限制
 
 - ramdisk 重新打包默认「跟随原镜像」压缩格式；若设备对 lz4 帧格式挑剔，可在压缩选项里改成 **gzip**（内核必然支持）。
