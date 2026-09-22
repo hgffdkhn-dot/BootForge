@@ -1,7 +1,10 @@
 package com.bootforge.core
 
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.File
+import java.io.InputStream
 import java.io.OutputStream
 import java.io.RandomAccessFile
 import java.security.MessageDigest
@@ -68,7 +71,7 @@ private class PartInputStream(
     private val src: ImageSource,
     start: Long,
     private val length: Long
-) : java.io.InputStream() {
+) : InputStream() {
 
     private var pos = start
     private var remaining = length
@@ -431,7 +434,7 @@ class BootImage {
 
     /** Opens a section as a stream; callers must close it. */
     fun streamPart(part: Part): InputStream? {
-        overrides[part]?.let { return java.io.ByteArrayInputStream(it) }
+        overrides[part]?.let { return ByteArrayInputStream(it) }
         val file = fileOverrides[part]
         if (file != null) return file.inputStream()
         val size = sizes[part] ?: 0L
@@ -616,14 +619,14 @@ class BootImage {
         if (fragments.isEmpty()) {
             return readPart(Part.RAMDISK) ?: ByteArray(0)
         }
-        val out = java.io.ByteArrayOutputStream()
+        val out = ByteArrayOutputStream()
         for (f in fragments) out.write(f.data, 0, f.data.size)
         return out.toByteArray()
     }
 
     private fun buildVendorTable(section: ByteArray): ByteArray {
         if (headerVersion < 4 || fragments.isEmpty()) return ByteArray(0)
-        val out = java.io.ByteArrayOutputStream()
+        val out = ByteArrayOutputStream()
         var rel = 0
         for (f in fragments) {
             val e = ByteArray(TABLE_ENTRY_SIZE)

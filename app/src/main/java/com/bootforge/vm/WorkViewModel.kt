@@ -18,6 +18,7 @@ import com.bootforge.util.LogBus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.util.Locale
 
@@ -373,7 +374,7 @@ class WorkViewModel(app: Application) : AndroidViewModel(app) {
         postStatus("重新压缩 ramdisk（${targetFormat.label}）…")
         rawSource.use { raw ->
             val decoded = Compress.decompressStream(raw, fmt)
-            val joined = Compress.concat(decoded, java.io.ByteArrayInputStream(appendCpio))
+            val joined = Compress.concat(decoded, ByteArrayInputStream(appendCpio))
             tmpRamdisk.outputStream().use { out ->
                 Compress.compressStream(joined, targetFormat, out)
             }
