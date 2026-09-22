@@ -5,12 +5,12 @@ import android.text.TextWatcher
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
-import com.bootforge.core.Cpio
 import com.bootforge.databinding.ItemInfoBinding
 import com.bootforge.databinding.ItemInjectBinding
 import com.bootforge.databinding.ItemLogBinding
 import com.bootforge.databinding.ItemRamdiskBinding
 import com.bootforge.vm.InjectItem
+import com.bootforge.vm.RamdiskRow
 
 class InfoAdapter : RecyclerView.Adapter<InfoAdapter.Holder>() {
 
@@ -81,12 +81,12 @@ class InjectAdapter(
     override fun getItemCount(): Int = items.size
 }
 
-class RamdiskAdapter(private val onDelete: (Cpio.Entry) -> Unit) :
+class RamdiskAdapter(private val onDelete: (RamdiskRow) -> Unit) :
     RecyclerView.Adapter<RamdiskAdapter.Holder>() {
 
-    private val entries = ArrayList<Cpio.Entry>()
+    private val entries = ArrayList<RamdiskRow>()
 
-    fun submit(list: List<Cpio.Entry>) {
+    fun submit(list: List<RamdiskRow>) {
         entries.clear()
         entries.addAll(list)
         notifyDataSetChanged()
@@ -100,7 +100,7 @@ class RamdiskAdapter(private val onDelete: (Cpio.Entry) -> Unit) :
     override fun onBindViewHolder(holder: Holder, position: Int) {
         val e = entries[position]
         holder.binding.tvName.text = e.name
-        holder.binding.tvMeta.text = "${e.permissions} · ${e.data.size} 字节"
+        holder.binding.tvMeta.text = "${e.perms} · ${e.size} 字节"
         holder.binding.btnDelete.setOnClickListener { onDelete(e) }
     }
 

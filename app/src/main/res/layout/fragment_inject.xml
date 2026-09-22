@@ -187,6 +187,15 @@
                         android:text="@string/filter" />
                 </LinearLayout>
 
+                <TextView
+                    android:id="@+id/tvNotice"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/ramdisk_notice"
+                    android:textAppearance="?attr/textAppearanceBodySmall"
+                    android:visibility="gone" />
+
                 <androidx.recyclerview.widget.RecyclerView
                     android:id="@+id/rvRamdisk"
                     android:layout_width="match_parent"

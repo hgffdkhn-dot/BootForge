@@ -63,6 +63,37 @@ class FileImageSource(file: File) : ImageSource {
     }
 }
 
+/** Reads a slice of an [ImageSource] as a normal InputStream. */
+private class PartInputStream(
+    private val src: ImageSource,
+    start: Long,
+    private val length: Long
+) : java.io.InputStream() {
+
+    private var pos = start
+    private var remaining = length
+
+    override fun read(): Int {
+        if (remaining <= 0L) return -1
+        val one = src.read(pos, 1)
+        if (one.isEmpty()) return -1
+        pos++
+        remaining--
+        return one[0].toInt() and 0xFF
+    }
+
+    override fun read(b: ByteArray, off: Int, len: Int): Int {
+        if (remaining <= 0L) return -1
+        val want = minOf(len.toLong(), remaining, 1 shl 20).toInt()
+        val got = src.read(pos, want)
+        if (got.isEmpty()) return -1
+        got.copyInto(b, off, 0, got.size)
+        pos += got.size
+        remaining -= got.size
+        return got.size
+    }
+}
+
 class ByteArrayImageSource(private val data: ByteArray, private val base: Long = 0) : ImageSource {
     override val size: Long get() = data.size.toLong()
     override fun read(offset: Long, length: Int): ByteArray {
@@ -313,18 +344,31 @@ class BootImage {
     private val offsets = HashMap<Part, Long>()
     private val sizes = HashMap<Part, Long>()
     private val overrides = HashMap<Part, ByteArray>()
+    private val fileOverrides = HashMap<Part, File>()
 
     private fun set(part: Part, offset: Long, size: Long) {
         offsets[part] = offset
         sizes[part] = size
     }
 
-    fun sizeOf(part: Part): Long = overrides[part]?.size?.toLong() ?: (sizes[part] ?: 0L)
+    fun sizeOf(part: Part): Long {
+        overrides[part]?.let { return it.size.toLong() }
+        fileOverrides[part]?.let { return it.length() }
+        return sizes[part] ?: 0L
+    }
+
     fun has(part: Part): Boolean = sizeOf(part) > 0L
     fun offsetOf(part: Part): Long = offsets[part] ?: 0L
 
     fun setPart(part: Part, data: ByteArray) {
+        fileOverrides.remove(part)
         overrides[part] = data
+    }
+
+    /** Replaces a section with a file on disk (keeps big ramdisks out of the heap). */
+    fun setFilePart(part: Part, file: File) {
+        overrides.remove(part)
+        fileOverrides[part] = file
     }
 
     /** Loads a section into memory. Only call this for small sections. */
@@ -344,11 +388,59 @@ class BootImage {
             pad(out, override.size.toLong(), ps)
             return
         }
-        val size = sizes[part] ?: 0L
-        if (size <= 0L) return
-        source?.copyTo(offsets[part] ?: 0L, size, out)
-        pad(out, size, ps)
+        val file = fileOverrides[part]
+        if (file != null) {
+            file.inputStream().use { it.copyTo(out) }
+            pad(out, file.length(), ps)
+            return
+        }
+        streamRaw(out, part)?.let { written ->
+            if (written > 0L) pad(out, written, ps)
+            return
+        }
     }
+
+    /** Writes the raw section bytes; returns how many bytes were written. */
+    private fun streamRaw(out: OutputStream, part: Part): Long? {
+        val size = sizes[part] ?: 0L
+        if (size <= 0L) return null
+        source?.copyTo(offsets[part] ?: 0L, size, out)
+        return size
+    }
+
+    /** Reads only the first [n] bytes of a section, for format detection. */
+    fun peekPart(part: Part, n: Int): ByteArray {
+        overrides[part]?.let { return it.copyOf(minOf(n, it.size)) }
+        val file = fileOverrides[part]
+        if (file != null) {
+            return file.inputStream().use { input ->
+                val buf = ByteArray(n)
+                var total = 0
+                while (total < n) {
+                    val r = input.read(buf, total, n - total)
+                    if (r < 0) break
+                    total += r
+                }
+                buf.copyOf(total)
+            }
+        }
+        val size = sizes[part] ?: 0L
+        if (size <= 0L) return ByteArray(0)
+        return source?.read(offsets[part] ?: 0L, minOf(n, size.toInt())) ?: ByteArray(0)
+    }
+
+    /** Opens a section as a stream; callers must close it. */
+    fun streamPart(part: Part): InputStream? {
+        overrides[part]?.let { return java.io.ByteArrayInputStream(it) }
+        val file = fileOverrides[part]
+        if (file != null) return file.inputStream()
+        val size = sizes[part] ?: 0L
+        if (size <= 0L) return null
+        val src = source ?: return null
+        return PartInputStream(src, offsets[part] ?: 0L, size)
+    }
+
+    fun streamRamdisk(): InputStream? = streamPart(Part.RAMDISK)
 
     /** Streams a section without padding (used by 解包). */
     private fun writeRaw(out: OutputStream, part: Part) {
@@ -506,8 +598,12 @@ class BootImage {
             Bytes.put32(hdr, 2124, sizeOf(Part.BOOTCONFIG))
         }
         out.write(hdr)
-        out.write(ramdiskSection)
-        pad(out, ramdiskSection.size.toLong(), pageSize)
+        if (overrides.containsKey(Part.RAMDISK) || fileOverrides.containsKey(Part.RAMDISK)) {
+            writePart(out, Part.RAMDISK, pageSize)
+        } else {
+            out.write(ramdiskSection)
+            pad(out, ramdiskSection.size.toLong(), pageSize)
+        }
         writePart(out, Part.DTB, pageSize)
         if (headerVersion >= 4) {
             out.write(tableBlob)

@@ -40,6 +40,7 @@
     <string name="mode_hint">权限</string>
     <string name="remove">删除</string>
 
+    <string name="ramdisk_notice">ramdisk 体积过大，已跳过完整解析（不显示文件列表）。注入仍可使用：会以追加方式流式写入，不影响打包结果。</string>
     <string name="log_title">运行日志</string>
     <string name="log_empty">暂无日志</string>
     <string name="copy">复制</string>

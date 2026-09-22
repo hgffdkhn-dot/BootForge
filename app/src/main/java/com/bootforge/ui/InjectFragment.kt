@@ -10,10 +10,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.recyclerview.widget.LinearLayoutManager
-import com.bootforge.core.Cpio
 import com.bootforge.core.Format
 import com.bootforge.databinding.FragmentInjectBinding
 import com.bootforge.vm.InjectItem
+import com.bootforge.vm.RamdiskRow
 import com.bootforge.vm.Options
 import com.bootforge.vm.WorkViewModel
 import com.google.android.material.snackbar.Snackbar
@@ -27,8 +27,12 @@ class InjectFragment : Fragment() {
     private val items = ArrayList<InjectItem>()
     private lateinit var injectAdapter: InjectAdapter
     private lateinit var ramdiskAdapter: RamdiskAdapter
-    private var allEntries: List<Cpio.Entry> = emptyList()
+    private var allEntries: List<RamdiskRow> = emptyList()
     private var nextId = 1L
+
+    private companion object {
+        const val MAX_ROWS = 300
+    }
 
     private val pickFiles = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         uris.forEach { uri ->
@@ -99,6 +103,8 @@ class InjectFragment : Fragment() {
         vm.ramdiskRows.observe(viewLifecycleOwner) { entries ->
             allEntries = entries
             applyFilter()
+            binding.tvNotice.visibility =
+                if (entries.isEmpty() && vm.ramdiskRowCount() == 0 && vm.hasImage()) View.VISIBLE else View.GONE
         }
         vm.busy.observe(viewLifecycleOwner) { busy ->
             binding.progress.visibility = if (busy) View.VISIBLE else View.GONE
@@ -116,9 +122,21 @@ class InjectFragment : Fragment() {
 
     private fun applyFilter() {
         val query = binding.etFilter.text.toString().trim()
-        val list = if (query.isEmpty()) allEntries else allEntries.filter { it.name.contains(query, true) }
+        val list = if (query.isEmpty()) {
+            allEntries
+        } else {
+            // 只渲染前 MAX_ROWS 条命中项
+            allEntries.asSequence().filter { it.name.contains(query, true) }.take(MAX_ROWS).toList()
+        }
         ramdiskAdapter.submit(list)
-        binding.tvRamdiskCount.text = "ramdisk 文件：${list.size} / ${allEntries.size}"
+        val total = vm.ramdiskRowCount()
+        binding.tvRamdiskCount.text = buildString {
+            append("ramdisk 文件：")
+            append(list.size)
+            append(" / ")
+            append(total)
+            if (total > allEntries.size) append("（已按上限显示）")
+        }
     }
 
     private fun nameOf(uri: android.net.Uri): String {

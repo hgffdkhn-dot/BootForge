@@ -29,6 +29,9 @@ data class InjectItem(
     var mode: String = "0755"
 )
 
+/** Lightweight ramdisk row: never carries the file payload into the UI layer. */
+data class RamdiskRow(val name: String, val perms: String, val size: Int)
+
 data class Options(
     val format: Format = Format.AUTO,
     val keepVerity: Boolean = false,
@@ -45,7 +48,7 @@ class WorkViewModel(app: Application) : AndroidViewModel(app) {
     val message = MutableLiveData<String?>(null)
     val meta = MutableLiveData<Meta?>(null)
     val infoRows = MutableLiveData<List<Pair<String, String>>>(emptyList())
-    val ramdiskRows = MutableLiveData<List<Cpio.Entry>>(emptyList())
+    val ramdiskRows = MutableLiveData<List<RamdiskRow>>(emptyList())
     val targets = MutableLiveData<List<String>>(emptyList())
     val lastOutput = MutableLiveData<File?>(null)
     val options = MutableLiveData(Options())
@@ -59,6 +62,16 @@ class WorkViewModel(app: Application) : AndroidViewModel(app) {
     private var ramdisk: Ramdisk? = null
     private var sourceName: String = "boot.img"
     private var targetIndex: Int = 0
+    /** 删除过条目就必须整包重建，否则注入走「追加」的流式快路径。 */
+    private var ramdiskDirty = false
+    private var ramdiskTotal = 0
+
+    companion object {
+        /** 列表最多渲染多少条，避免上万条时一次性 inflate 卡死主线程。 */
+        private const val MAX_ROWS = 300
+        /** ramdisk 超过此大小不再解析（默认 96 MB，可按可用内存收紧）。 */
+        private const val MAX_PARSE_BYTES = 96L * 1024 * 1024
+    }
 
     private fun log(msg: String) = LogBus.add(msg)
 
@@ -132,7 +145,11 @@ class WorkViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             img.readRamdisk()
         }
+        val size = payload?.size?.toLong() ?: 0L
         ramdisk = if (payload == null || payload.isEmpty()) {
+            null
+        } else if (size > parseBudget()) {
+            log("ramdisk 较大（${size / 1048576} MB），跳过完整解析；注入将以追加方式流式写入")
             null
         } else try {
             Ramdisk.fromImage(payload)
@@ -147,9 +164,26 @@ class WorkViewModel(app: Application) : AndroidViewModel(app) {
             img.fragments.map { "${it.name}（${typeName(it.type)}）" }
         } else listOf("boot ramdisk")
         targets.postValue(names)
-        ramdiskRows.postValue(ramdisk?.entries?.toList() ?: emptyList())
+        ramdiskDirty = false
+        ramdiskTotal = ramdisk?.size ?: 0
+        ramdiskRows.postValue(buildRows(ramdisk))
         ramdisk?.let { log("ramdisk 格式 ${it.sourceFormat.label}，共 ${it.size} 个条目") }
     }
+
+    /** 可用内存越小，允许解析的 ramdisk 越小。 */
+    private fun parseBudget(): Long {
+        val max = Runtime.getRuntime().maxMemory()
+        return minOf(MAX_PARSE_BYTES, max / 4)
+    }
+
+    /** 只把前 [MAX_ROWS] 条交给 RecyclerView，避免上万条时主线程 inflate 卡死。 */
+    private fun buildRows(rd: Ramdisk?): List<RamdiskRow> {
+        val entries = rd?.entries ?: return emptyList()
+        ramdiskTotal = entries.size
+        return entries.take(MAX_ROWS).map { RamdiskRow(it.name, it.permissions, it.data.size) }
+    }
+
+    fun ramdiskRowCount(): Int = ramdiskTotal
 
     private fun typeName(type: Int) = when (type) {
         1 -> "platform"
@@ -204,7 +238,14 @@ class WorkViewModel(app: Application) : AndroidViewModel(app) {
                 rows += "  dtb #${b.index}" to (if (desc.isBlank()) "${b.size} 字节" else "$desc（${b.size} 字节）")
             }
         }
-        ramdisk?.let { rows += "ramdisk 条目" to "${it.size} 个" }
+        if (ramdiskTotal > 0) {
+            rows += "ramdisk 条目" to buildString {
+                append(ramdiskTotal)
+                append(" 个")
+                if (ramdiskTotal > MAX_ROWS) append("（列表仅显示前 $MAX_ROWS 个）")
+                if (ramdisk == null) append(" · 未解析，注入走追加模式")
+            }
+        }
         return rows
     }
 
@@ -253,23 +294,106 @@ class WorkViewModel(app: Application) : AndroidViewModel(app) {
     fun repack(options: Options) = run("重新打包") { repackInternal(options, "-patched") }
 
     fun inject(items: List<InjectItem>, options: Options) = run("注入并打包") {
-        val rd = ramdisk ?: error("当前镜像没有可写入的 ramdisk")
-        items.forEach { item ->
-            val bytes = getApplication<Application>().contentResolver.openInputStream(item.uri)?.use { it.readBytes() }
-                ?: error("读取 ${item.name} 失败")
-            val mode = item.mode.trim().toIntOrNull(8) ?: error("权限 ${item.mode} 不是合法的八进制数")
+        val img = image ?: error("尚未加载镜像")
+        val modeList = ArrayList<Pair<InjectItem, Int>>()
+        for (item in items) {
+            val mode = item.mode.trim().toIntOrNull(8)
+                ?: error("权限 ${item.mode} 不是合法的八进制数")
+            modeList.add(Pair(item, mode))
+        }
+
+        val rd = ramdisk
+        if (rd != null && !ramdiskDirty) {
+            // 已解析且没删过条目：仍然走追加模式，避免整包解压/重压大 ramdisk
+            postStatus("准备注入 ${items.size} 个文件 …")
+            injectByAppend(img, items, modeList, options)
+        } else if (rd != null) {
+            postStatus("重建 ramdisk（曾删除条目）…")
+            for ((item, mode) in modeList) {
+                val bytes = readUri(item.uri) ?: error("读取 ${item.name} 失败")
+                val target = item.target.trim().ifBlank { item.name }
+                rd.add(target, bytes, mode or 0x8000)
+                log("注入 ${item.name} → $target（${item.mode}）")
+            }
+            ramdiskTotal = rd.size
+            ramdiskDirty = false
+            ramdiskRows.postValue(buildRows(rd))
+            repackInternal(options, "-injected")
+        } else {
+            postStatus("以追加方式注入（ramdisk 未解析）…")
+            injectByAppend(img, items, modeList, options)
+        }
+    }
+
+    private fun readUri(uri: Uri): ByteArray? =
+        getApplication<Application>().contentResolver.openInputStream(uri)?.use { it.readBytes() }
+
+    /**
+     * 追加式注入：原 ramdisk 原样解压后，把新文件拼成一个新的 cpio 追加在尾部，
+     * 再流式压缩写回。内核会按顺序解析串联的 cpio，因此等价于"塞进 ramdisk"。
+     * 全程不把整个 ramdisk 装进内存。
+     */
+    private fun injectByAppend(
+        img: BootImage,
+        items: List<InjectItem>,
+        modeList: List<Pair<InjectItem, Int>>,
+        options: Options
+    ) {
+        if (img.isVendorBoot()) {
+            // vendor_boot 的片段需要整段重建，只能走 ramdisk 解析路径
+            val rd = ramdisk ?: error("vendor_boot 需要先解析 ramdisk 才能注入（当前已跳过解析）")
+            for ((item, mode) in modeList) {
+                val bytes = readUri(item.uri) ?: error("读取 ${item.name} 失败")
+                rd.add(item.target.trim().ifBlank { item.name }, bytes, mode or 0x8000)
+                log("注入 ${item.name}")
+            }
+            ramdiskTotal = rd.size
+            repackInternal(options, "-injected")
+            return
+        }
+
+        val rawSource = img.streamRamdisk() ?: error("当前镜像没有可写入的 ramdisk")
+        val fmt = Compress.detect(img.peekPart(BootImage.Part.RAMDISK, 8))
+        if (fmt == Format.AUTO) error("无法识别 ramdisk 压缩格式")
+
+        // 1) 生成一个只含新文件的 cpio
+        val scratch = Ramdisk(ArrayList<Cpio.Entry>(), fmt)
+        for ((item, mode) in modeList) {
+            val bytes = readUri(item.uri) ?: error("读取 ${item.name} 失败")
             val target = item.target.trim().ifBlank { item.name }
-            rd.add(target, bytes, mode or 0x8000)
+            scratch.add(target, bytes, mode or 0x8000)
             log("注入 ${item.name} → $target（${item.mode}）")
         }
-        ramdiskRows.postValue(rd.entries.toList())
+        val appendCpio = Cpio.build(scratch.entries)
+
+        // 2) 解压原 ramdisk 到临时文件，再与追加段串联流式压缩
+        val tmpRamdisk = File(outDir, "ramdisk_append_${System.currentTimeMillis()}.tmp")
+        tmpRamdisk.deleteOnExit()
+        val targetFormat = if (options.format == Format.AUTO) fmt else options.format
+        postStatus("重新压缩 ramdisk（${targetFormat.label}）…")
+        rawSource.use { raw ->
+            val decoded = Compress.decompressStream(raw, fmt)
+            val joined = Compress.concat(decoded, java.io.ByteArrayInputStream(appendCpio))
+            tmpRamdisk.outputStream().use { out ->
+                Compress.compressStream(joined, targetFormat, out)
+            }
+        }
+
+        img.setFilePart(BootImage.Part.RAMDISK, tmpRamdisk)
+        log("ramdisk 流式重建完成：${tmpRamdisk.length()} 字节")
+        ramdisk = null
+        ramdiskRows.postValue(emptyList())
         repackInternal(options, "-injected")
     }
 
     private fun repackInternal(options: Options, suffix: String): String {
         val img = image ?: error("尚未加载镜像")
         val rd = ramdisk
-        if (rd != null) {
+        if (rd == null) {
+            if (!options.keepVerity || !options.keepForceEncrypt) {
+                log("ramdisk 未解析，跳过 fstab 修补（注入仍已生效）")
+            }
+        } else {
             val patch = Patcher.patchFstab(rd, options.keepVerity, options.keepForceEncrypt)
             patch.notes.forEach { log(it) }
             if (patch.files > 0) log("共修补 ${patch.files} 个 fstab 文件")
@@ -299,8 +423,10 @@ class WorkViewModel(app: Application) : AndroidViewModel(app) {
     fun removeRamdiskFile(name: String) = run("删除 $name") {
         val rd = ramdisk ?: error("没有 ramdisk")
         if (rd.remove(name)) {
-            ramdiskRows.postValue(rd.entries.toList())
-            log("已删除 $name")
+            ramdiskDirty = true
+            ramdiskTotal = rd.size
+            ramdiskRows.postValue(buildRows(rd))
+            log("已删除 $name（下次打包将整包重建 ramdisk）")
         }
         Unit
     }
