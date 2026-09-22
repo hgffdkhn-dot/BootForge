@@ -22,6 +22,9 @@ jobs:
           distribution: "temurin"
           cache: gradle
 
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
       - name: Install Gradle 8.9
         run: |
           set -e
@@ -50,7 +53,6 @@ jobs:
           ls -lh artifacts
 
       - name: Optional release signing
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -58,6 +60,10 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -e
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
+            echo "未配置签名密钥（KEYSTORE_BASE64），跳过签名步骤"
+            exit 0
+          fi
           echo "$KEYSTORE_BASE64" | base64 -d > /tmp/bootforge.jks
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
           APKSIGNER=$(find "$SDK/build-tools" -name apksigner 2>/dev/null | sort | tail -1 || true)
