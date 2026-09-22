@@ -11,6 +11,10 @@ jobs:
   build:
     name: Assemble APK
     runs-on: ubuntu-latest
+    env:
+      # ubuntu-latest 镜像已内置 Android SDK（含 licenses 与 build-tools）
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,27 +26,34 @@ jobs:
           distribution: "temurin"
           cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Accept Android SDK licenses
+        run: |
+          set -e
+          mkdir -p "$ANDROID_HOME/licenses"
+          printf '\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n' > "$ANDROID_HOME/licenses/android-sdk-license"
+          printf '\n84831b9409646a918e30573bab4c9c91346d8abd\n' > "$ANDROID_HOME/licenses/android-sdk-preview-license"
+          ls -1 "$ANDROID_HOME/licenses"
+          ls -1 "$ANDROID_HOME" | head -20
 
       - name: Install Gradle 8.9
         run: |
           set -e
-          if ! command -v gradle >/dev/null 2>&1; then
+          if [ ! -x /opt/gradle-8.9/bin/gradle ]; then
             curl -fsSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.9-bin.zip
             sudo unzip -q /tmp/gradle.zip -d /opt
-            sudo ln -sf /opt/gradle-8.9/bin/gradle /usr/local/bin/gradle
           fi
-          gradle --version | head -3
+          sudo ln -sf /opt/gradle-8.9/bin/gradle /usr/local/bin/gradle
+          gradle --version | head -5
 
       - name: Assemble Debug
-        run: gradle --no-daemon --stacktrace :app:assembleDebug
+        run: /opt/gradle-8.9/bin/gradle --no-daemon --stacktrace :app:assembleDebug
 
       - name: Assemble Release
-        run: gradle --no-daemon --stacktrace :app:assembleRelease
+        run: /opt/gradle-8.9/bin/gradle --no-daemon --stacktrace :app:assembleRelease
 
       - name: Collect artifacts
         run: |
+          set -e
           mkdir -p artifacts
           cp app/build/outputs/apk/debug/app-debug.apk artifacts/BootForge-debug.apk
           if [ -f app/build/outputs/apk/release/app-release-unsigned.apk ]; then
@@ -65,8 +76,7 @@ jobs:
             exit 0
           fi
           echo "$KEYSTORE_BASE64" | base64 -d > /tmp/bootforge.jks
-          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
-          APKSIGNER=$(find "$SDK/build-tools" -name apksigner 2>/dev/null | sort | tail -1 || true)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner 2>/dev/null | sort | tail -1 || true)
           if [ -z "$APKSIGNER" ]; then
             echo "未找到 apksigner，跳过签名"
           else
