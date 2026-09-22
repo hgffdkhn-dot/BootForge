@@ -15,6 +15,7 @@ import com.bootforge.core.Format
 import com.bootforge.databinding.FragmentHomeBinding
 import com.bootforge.vm.Options
 import com.bootforge.vm.WorkViewModel
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import java.util.Locale
 
@@ -70,7 +71,13 @@ class HomeFragment : Fragment() {
             vm.backup(binding.etPartition.text.toString().trim().ifBlank { "boot" })
         }
         binding.btnFlash.setOnClickListener {
-            vm.flash(binding.etPartition.text.toString().trim().ifBlank { "boot" })
+            val partition = binding.etPartition.text.toString().trim().ifBlank { "boot" }
+            val file = vm.lastOutput.value
+            if (file == null) {
+                Snackbar.make(binding.root, "请先重新打包生成产物", Snackbar.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            confirmFlash(partition, file.name, file.length())
         }
 
         binding.spinnerFormat.adapter = ArrayAdapter(
@@ -134,6 +141,49 @@ class HomeFragment : Fragment() {
         }
         vm.lastOutput.observe(viewLifecycleOwner) { file ->
             binding.tvOutput.text = file?.let { "最近产物：${it.name}（${it.length()} 字节）" } ?: "暂无产物"
+        }
+    }
+
+    /** 刷写分区是不可逆操作，二次确认，避免误触。 */
+    private fun confirmFlash(partition: String, fileName: String, size: Long) {
+        val msg = buildString {
+            append("即将把 ")
+            append(fileName)
+            append("（")
+            append(String.format(Locale.US, "%.2f MB", size / 1048576.0))
+            append("）写入 ")
+            append(partition)
+            append(" 分区。\n\n")
+            append("• 该操作不可撤销，错误的镜像会直接导致无法开机\n")
+            append("• 请确认已备份原分区，且设备电量充足\n")
+            append("• 若设备启用了校验启动（AVB），需另行处理 vbmeta，否则可能卡开机")
+        }
+        val dialog = MaterialAlertDialogBuilder(requireContext())
+            .setTitle("⚠️ 确认刷入？")
+            .setMessage(msg)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("刷入") { _, _ ->
+                vm.flash(partition)
+            }
+            .setCancelable(true)
+            .create()
+        dialog.setOnShowListener {
+            // 危险操作：把「刷入」按钮标成错误色
+            dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE)
+                ?.setTextColor(resolveColorError())
+        }
+        dialog.show()
+    }
+
+    private fun resolveColorError(): Int {
+        val tv = android.util.TypedValue()
+        return if (requireContext().theme.resolveAttribute(
+                com.google.android.material.R.attr.colorError, tv, true
+            )
+        ) {
+            tv.data
+        } else {
+            android.graphics.Color.RED
         }
     }
 
