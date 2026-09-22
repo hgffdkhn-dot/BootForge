@@ -79,7 +79,7 @@ konan 工具链，且 1.9.x 没有 aarch64 版本的预编译包，在 CI 上非
 cd native
 make              # 用系统 gcc，产出 build/bootforge
 make static       # 静态链接
-make android ANDROID_NDK_HOME=/path/to/ndk   # aarch64 静态二进制
+make android ANDROID_NDK_HOME=/path/to/ndk   # aarch64 动态二进制（推荐）
 make android-arm ANDROID_NDK_HOME=/path/to/ndk
 sh test/run.sh    # 端到端自检：造镜像 → info → unpack → repack → inject → patch
 ```
@@ -89,8 +89,9 @@ sh test/run.sh    # 端到端自检：造镜像 → info → unpack → repack �
 `bootforge-cli` 这个 artifact 里有三个二进制：
 
 - `bootforge-linux-x86_64`（x64 Linux 主机）
-- `bootforge-android-aarch64`（绝大多数安卓手机）
+- `bootforge-android-aarch64`（绝大多数安卓手机，**首选这个**）
 - `bootforge-android-armv7`（老设备）
+- `bootforge-android-aarch64-static`（静态版，备选）
 
 手机上用法：
 
@@ -99,6 +100,24 @@ adb push bootforge-android-aarch64 /data/local/tmp/bootforge
 adb shell chmod 755 /data/local/tmp/bootforge
 adb shell /data/local/tmp/bootforge info /dev/block/by-name/boot
 ```
+
+### 报错：TLS segment is underaligned
+
+如果运行静态版出现：
+
+```
+"bootforge": executable's TLS segment is underaligned: alignment is 8 (skew 0),
+needs to be at least 64 for ARM64 Bionic
+```
+
+这是 **Android bionic 对 arm64 静态可执行文件的限制**：它要求 TLS 段对齐至少 64 字节，
+而 lld 给静态可执行文件只排了 8。跟代码无关，换链接方式即可：
+
+1. **改用动态版** `bootforge-android-aarch64`（推荐）——由 `/system/bin/linker64` 加载，
+   不走这条检查，手机上自带 bionic 所以完全够用；
+2. 或者在电脑上用 `bootforge-linux-x86_64` 处理镜像，再 `fastboot flash` 刷回去。
+
+本地构建时对应 `make android`（动态）与 `make android-static`（静态）两个目标。
 
 ## 目录结构
 

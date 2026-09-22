@@ -72,14 +72,15 @@ jobs:
           if-no-files-found: error
 
   cli:
-    # 纯 C 实现，用 NDK 交叉编译成静态二进制，跟 magiskboot 一样的路子。
-    # 不需要下载 1 GB 的 Kotlin/Native 工具链，全程几十秒。
+    # 纯 C 实现，用 NDK 交叉编译，跟 magiskboot 一样的路子。
+    # 不需要 1 GB 的 Kotlin/Native 工具链，全程几十秒。
     name: CLI (x86_64 + aarch64 + armv7)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      NDK_HOME: /usr/local/lib/android/sdk/ndk/27.0.12077973
     steps:
       - uses: actions/checkout@v4
 
@@ -89,10 +90,7 @@ jobs:
 
       - name: Smoke test on host
         working-directory: native
-        run: |
-          set -e
-          mkdir -p build
-          sh test/run.sh
+        run: sh test/run.sh
 
       - name: Collect x86_64
         run: |
@@ -106,9 +104,10 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.0.12077973" | tail -3
 
-      - name: Cross compile aarch64 (Android, static)
+      # 动态链接版：由 /system/bin/linker64 加载，不受 bionic 的 TLS 对齐检查影响
+      - name: Cross compile aarch64 (dynamic, recommended)
         working-directory: native
-        run: make android ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973
+        run: make android ANDROID_NDK_HOME=$NDK_HOME
 
       - name: Collect aarch64
         run: |
@@ -117,9 +116,9 @@ jobs:
           chmod +x artifacts/bootforge-android-aarch64
           file artifacts/bootforge-android-aarch64 || true
 
-      - name: Cross compile armv7 (Android, static)
+      - name: Cross compile armv7 (dynamic)
         working-directory: native
-        run: make android-arm ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973
+        run: make android-arm ANDROID_NDK_HOME=$NDK_HOME
 
       - name: Collect armv7
         run: |
@@ -127,6 +126,18 @@ jobs:
           cp native/build/bootforge artifacts/bootforge-android-armv7
           chmod +x artifacts/bootforge-android-armv7
           file artifacts/bootforge-android-armv7 || true
+
+      # 静态版作为备选：部分设备会报 TLS 段对齐不足
+      - name: Cross compile aarch64 (static, fallback)
+        working-directory: native
+        run: make android-static ANDROID_NDK_HOME=$NDK_HOME
+
+      - name: Collect aarch64 static
+        run: |
+          set -e
+          cp native/build/bootforge artifacts/bootforge-android-aarch64-static
+          chmod +x artifacts/bootforge-android-aarch64-static
+          file artifacts/bootforge-android-aarch64-static || true
 
       - uses: actions/upload-artifact@v4
         with:
