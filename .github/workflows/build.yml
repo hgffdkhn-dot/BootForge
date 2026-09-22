@@ -1,0 +1,102 @@
+name: Build APK
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Assemble APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: gradle
+
+      - name: Install Gradle 8.9
+        run: |
+          set -e
+          if ! command -v gradle >/dev/null 2>&1; then
+            curl -fsSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.9-bin.zip
+            sudo unzip -q /tmp/gradle.zip -d /opt
+            sudo ln -sf /opt/gradle-8.9/bin/gradle /usr/local/bin/gradle
+          fi
+          gradle --version | head -3
+
+      - name: Assemble Debug
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Assemble Release
+        run: gradle --no-daemon --stacktrace :app:assembleRelease
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p artifacts
+          cp app/build/outputs/apk/debug/app-debug.apk artifacts/BootForge-debug.apk
+          if [ -f app/build/outputs/apk/release/app-release-unsigned.apk ]; then
+            cp app/build/outputs/apk/release/app-release-unsigned.apk artifacts/BootForge-release-unsigned.apk
+          else
+            cp app/build/outputs/apk/release/app-release.apk artifacts/BootForge-release.apk
+          fi
+          ls -lh artifacts
+
+      - name: Optional release signing
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -e
+          echo "$KEYSTORE_BASE64" | base64 -d > /tmp/bootforge.jks
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
+          APKSIGNER=$(find "$SDK/build-tools" -name apksigner 2>/dev/null | sort | tail -1 || true)
+          if [ -z "$APKSIGNER" ]; then
+            echo "未找到 apksigner，跳过签名"
+          else
+            SRC=$(ls artifacts/BootForge-release*.apk | head -1)
+            "$APKSIGNER" sign --ks /tmp/bootforge.jks \
+              --ks-pass "pass:$KEYSTORE_PASSWORD" \
+              --key-pass "pass:$KEY_PASSWORD" \
+              --ks-key-alias "$KEY_ALIAS" \
+              --out artifacts/BootForge-release-signed.apk "$SRC"
+            rm -f "$SRC"
+          fi
+          rm -f /tmp/bootforge.jks
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BootForge-apk
+          path: artifacts/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: BootForge-apk
+          path: artifacts
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

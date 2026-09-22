@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BootForge</string>
+
+    <string name="tab_image">镜像</string>
+    <string name="tab_inject">注入</string>
+    <string name="tab_log">日志</string>
+
+    <string name="current_image">当前镜像</string>
+    <string name="no_image">未选择镜像</string>
+    <string name="ramdisk_target">ramdisk 目标</string>
+    <string name="pick_image">选择 boot / vendor_boot 镜像</string>
+    <string name="image_info">镜像分析</string>
+
+    <string name="patch_options">打包与修补选项</string>
+    <string name="compression">ramdisk 压缩</string>
+    <string name="keep_verity">保留 dm-verity（不打补丁）</string>
+    <string name="keep_force_encrypt">保留强制加密（不打补丁）</string>
+    <string name="extra_cmdline">追加内核命令行</string>
+
+    <string name="actions">操作</string>
+    <string name="unpack">解包</string>
+    <string name="repack">重新打包</string>
+    <string name="export_image">导出产物</string>
+    <string name="backup_partition">备份分区</string>
+    <string name="flash_partition">刷入分区</string>
+    <string name="partition_hint">分区名（boot / init_boot / vendor_boot / recovery）</string>
+    <string name="status_idle">等待导入镜像</string>
+    <string name="no_output">暂无产物</string>
+
+    <string name="inject_files">待注入文件</string>
+    <string name="inject_empty">还没有添加文件，点下方「添加文件」选择要写进 ramdisk 的文件</string>
+    <string name="add_files">添加文件</string>
+    <string name="clear">清空</string>
+    <string name="inject_and_pack">注入并重新打包</string>
+    <string name="ramdisk_files">ramdisk 文件</string>
+    <string name="filter_hint">按名称过滤</string>
+    <string name="filter">过滤</string>
+    <string name="target_path_hint">目标路径</string>
+    <string name="mode_hint">权限</string>
+    <string name="remove">删除</string>
+
+    <string name="log_title">运行日志</string>
+    <string name="log_empty">暂无日志</string>
+    <string name="copy">复制</string>
+</resources>
