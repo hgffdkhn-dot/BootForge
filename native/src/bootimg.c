@@ -6,8 +6,8 @@
 #include <unistd.h>
 
 /* ==================================================================== */
-/*  boot / vendor_boot 镜像解析与重建                                    */
-/*  除头部外，各段均按需从文件读取，避免整份镜像占满内存                  */
+/*  boot / vendor_boot parsing and rebuilding                             */
+/*  Sections are read lazily by offset+size so a 100 MB image fits fine.  */
 /* ==================================================================== */
 
 typedef struct {
@@ -29,7 +29,7 @@ static size_t src_read(src_t *s, uint64_t off, void *dst, size_t n) {
     return fread(dst, 1, n, s->f);
 }
 
-/* ------------------------------------------------------------ 生命周期 */
+/* ------------------------------------------------------- lifecycle */
 
 int boot_is_vendor(const boot_image *img) { return img->is_vendor; }
 
@@ -74,7 +74,7 @@ void boot_set_part_file(boot_image *img, part_t p, const char *path) {
     strcpy(img->override_path[p], path);
 }
 
-/* ------------------------------------------------------------ 解析 */
+/* --------------------------------------------------------------- parse */
 
 static uint64_t find_magic(src_t *s, uint64_t file_size, int *is_vendor) {
     uint8_t buf[65536];
@@ -112,7 +112,7 @@ static int parse_boot(boot_image *img, src_t *s, uint64_t base) {
     if (memcmp(h, BOOT_MAGIC, MAGIC_LEN) != 0) return -1;
 
     int ver = (int)rd32(h + 0x28);
-    if (ver > 8) ver = 0;   /* legacy 镜像此处存的是 dt_size */
+    if (ver > 8) ver = 0;   /* legacy images store dt_size here */
     img->header_version = ver;
 
     if (ver >= 3) {
@@ -215,31 +215,31 @@ static int parse_vendor(boot_image *img, src_t *s, uint64_t base) {
 int boot_parse(boot_image *img, const char *path) {
     memset(img, 0, sizeof(*img));
     src_t s;
-    if (src_open(&s, path) != 0) die("无法打开镜像: %s", path);
+    if (src_open(&s, path) != 0) die("cannot open image: %s", path);
 
     struct stat st;
-    if (stat(path, &st) != 0) { src_close(&s); die("无法获取大小: %s", path); }
+    if (stat(path, &st) != 0) { src_close(&s); die("cannot stat: %s", path); }
     uint64_t file_size = (uint64_t)st.st_size;
 
     int is_vendor = 0;
     uint64_t magic = find_magic(&s, file_size, &is_vendor);
     if (magic == (uint64_t)-1) {
         src_close(&s);
-        die("未找到 ANDROID! / VNDRBOOT 魔数，不是有效的启动镜像");
+        die("no ANDROID! / VNDRBOOT magic found; not a valid boot image");
     }
     img->is_vendor = is_vendor;
     img->magic_offset = magic;
 
     int rc = is_vendor ? parse_vendor(img, &s, magic) : parse_boot(img, &s, magic);
-    if (rc != 0) { src_close(&s); die("镜像头解析失败"); }
+    if (rc != 0) { src_close(&s); die("failed to parse image header"); }
 
-    /* 把 FILE* 藏进 raw 字段，由 boot_free 关闭 */
+    /* stash the FILE* in raw; closed by boot_free */
     img->raw = (uint8_t *)xmalloc(sizeof(src_t));
     memcpy(img->raw, &s, sizeof(src_t));
     return 0;
 }
 
-/* ------------------------------------------------------------ 读取段 */
+/* ------------------------------------------------------- read sections */
 
 static uint8_t *read_range(boot_image *img, uint64_t off, uint64_t len, size_t *out_len) {
     if (len == 0) { *out_len = 0; return NULL; }
@@ -288,7 +288,7 @@ uint8_t *boot_peek_part(boot_image *img, part_t p, size_t n, size_t *out_len) {
     return read_range(img, img->off[p], len, out_len);
 }
 
-/* ------------------------------------------------------------ 片段 */
+/* ---------------------------------------------------------- fragments */
 
 int boot_load_frags(boot_image *img) {
     if (!img->is_vendor) return 0;
@@ -358,7 +358,7 @@ int boot_load_frags(boot_image *img) {
     return 0;
 }
 
-/* ------------------------------------------------------------ 解包 */
+/* ------------------------------------------------------------- unpack */
 
 static int dump_part(const boot_image *img, part_t p, const char *dir) {
     if (!boot_has(img, p)) return 0;
@@ -400,7 +400,7 @@ int boot_extract_parts(const boot_image *img, const char *dir) {
     return 0;
 }
 
-/* ------------------------------------------------------------ 打包 */
+/* --------------------------------------------------------------- pack */
 
 static void write_part(FILE *out, const boot_image *img, part_t p, uint64_t ps) {
     uint64_t written = 0;
@@ -471,13 +471,13 @@ static void put_cstr(uint8_t *h, int off, const char *s, int max) {
 
 int boot_pack(const boot_image *img, const char *out_path) {
     FILE *out = fopen(out_path, "wb");
-    if (!out) die("无法创建输出文件: %s", out_path);
+    if (!out) die("cannot create output file: %s", out_path);
 
     if (img->is_vendor) {
         uint64_t hdr_size = img->header_version >= 4 ? VENDOR_HDR_V4 : VENDOR_HDR_V3;
         uint64_t ps = img->page_size;
 
-        /* 拼接片段或沿用原 ramdisk */
+        /* concat fragments, or reuse the original ramdisk */
         uint8_t *section = NULL;
         size_t section_len = 0;
         if (img->nfrag) {
@@ -494,7 +494,7 @@ int boot_pack(const boot_image *img, const char *out_path) {
             section = boot_read_part((boot_image *)img, P_RAMDISK, &section_len);
         }
 
-        /* 重建片段表 */
+        /* rebuild the fragment table */
         uint8_t *table = NULL;
         size_t table_len = 0;
         if (img->header_version >= 4 && img->nfrag) {
@@ -596,7 +596,7 @@ int boot_pack(const boot_image *img, const char *out_path) {
     wr32(h + 0x2C, (uint32_t)img->os_version);
     put_cstr(h, 0x30, img->board_name, 16);
 
-    /* cmdline 拆成两段 */
+    /* cmdline is split across two fields */
     size_t cn = strlen(img->cmdline);
     if (cn > 511 + 1023) cn = 511 + 1023;
     size_t first = cn < 511 ? cn : 511;

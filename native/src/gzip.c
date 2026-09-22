@@ -3,9 +3,9 @@
 #include <string.h>
 
 /* ==================================================================== */
-/*  纯 C 的 DEFLATE / GZIP                                              */
-/*  压缩：LZ77 + 固定 Huffman                                            */
-/*  解压：stored / 固定 Huffman / 动态 Huffman                           */
+/*  Pure C DEFLATE / GZIP                                                */
+/*  Compress: LZ77 + fixed Huffman                                       */
+/*  Decompress: stored / fixed Huffman / dynamic Huffman                 */
 /* ==================================================================== */
 
 static const unsigned short LEN_BASE[29] = {
@@ -25,7 +25,7 @@ static const unsigned char DIST_EXTRA[30] = {
 };
 static const int DYN_ORDER[19] = {16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15};
 
-/* ------------------------------------------------------- 位流 */
+/* --------------------------------------------------------- bitstream */
 
 typedef struct {
     uint8_t *buf;
@@ -48,7 +48,7 @@ static void bw_need(bw_t *w, size_t extra) {
     w->cap = cap;
 }
 
-/* LSB-first 写 count 位 */
+/* write count bits, LSB-first */
 static void bw_bits(bw_t *w, unsigned value, int count) {
     for (int i = 0; i < count; i++) {
         w->acc |= ((value >> i) & 1u) << w->bits;
@@ -106,11 +106,11 @@ static unsigned br_bits(br_t *r, int count) {
 
 static void br_align(br_t *r) { r->acc = 0; r->bits = 0; }
 
-/* ------------------------------------------------------- Huffman */
+/* ---------------------------------------------------------- Huffman */
 
 typedef struct {
     unsigned short counts[16];
-    unsigned short *symbols;   /* 按规范顺序排列的符号表 */
+    unsigned short *symbols;   /* symbols in canonical order */
     int nsym;
 } huff_t;
 
@@ -143,11 +143,11 @@ static int huff_decode(const huff_t *h, br_t *r) {
         first = (first + count) << 1;
         code <<= 1;
     }
-    die("损坏的 Huffman 编码");
+    die("corrupt Huffman code");
     return -1;
 }
 
-/* 固定 Huffman 的规范码（已按 deflate 要求位反转） */
+/* canonical codes for fixed Huffman (bit-reversed for deflate) */
 static unsigned short LIT_CODE[288];
 static unsigned char LIT_LEN[288];
 static unsigned short DIST_CODE[32];
@@ -196,7 +196,7 @@ static void fixed_init(void) {
     fixed_ready = 1;
 }
 
-/* ------------------------------------------------------- 压缩 */
+/* ------------------------------------------------------ compression */
 
 static unsigned hash4(const uint8_t *p) {
     unsigned a = p[0], b = p[1], c = p[2], d = p[3];
@@ -251,7 +251,7 @@ static uint8_t *deflate_raw(const uint8_t *src, size_t n, size_t *out_len) {
     }
 
     bw_bits(&w, 1, 1);  /* BFINAL */
-    bw_bits(&w, 1, 2);  /* 固定 Huffman */
+    bw_bits(&w, 1, 2);  /* fixed Huffman */
 
     int *table = xmalloc(DEF_HASH_SIZE * sizeof(int));
     for (int i = 0; i < DEF_HASH_SIZE; i++) table[i] = -1;
@@ -290,7 +290,7 @@ static uint8_t *deflate_raw(const uint8_t *src, size_t n, size_t *out_len) {
     return w.buf;
 }
 
-/* ------------------------------------------------------- 解压 */
+/* ---------------------------------------------------- decompression */
 
 static uint32_t crc32_buf(const uint8_t *d, size_t n) {
     static uint32_t tbl[256];
@@ -317,12 +317,12 @@ static void inflate_block(br_t *r, buf_t *out, const huff_t *lh, const huff_t *d
             buf_putc(out, sym);
         } else {
             int idx = sym - 257;
-            if (idx < 0 || idx >= 29) die("无效长度码 %d", sym);
+            if (idx < 0 || idx >= 29) die("invalid length code %d", sym);
             size_t length = LEN_BASE[idx] + br_bits(r, LEN_EXTRA[idx]);
             int ds = huff_decode(dh, r);
-            if (ds < 0 || ds >= 30) die("无效距离码 %d", ds);
+            if (ds < 0 || ds >= 30) die("invalid distance code %d", ds);
             size_t distance = DIST_BASE[ds] + br_bits(r, DIST_EXTRA[ds]);
-            if (distance > out->len) die("距离越界: %zu > %zu", distance, out->len);
+            if (distance > out->len) die("distance out of range: %zu > %zu", distance, out->len);
             size_t start = out->len - distance;
             buf_reserve(out, length);
             for (size_t k = 0; k < length; k++)
@@ -394,7 +394,7 @@ static uint8_t *inflate_raw(const uint8_t *src, size_t n, size_t *out_len) {
             huff_free(&lh);
             huff_free(&dh);
         } else {
-            die("无效的 deflate 块类型 %d", btype);
+            die("invalid deflate block type %d", btype);
         }
         if (final) break;
     }
@@ -402,7 +402,7 @@ static uint8_t *inflate_raw(const uint8_t *src, size_t n, size_t *out_len) {
     return out.data;
 }
 
-/* ------------------------------------------------------- GZIP 包装 */
+/* ------------------------------------------------------ GZIP wrapper */
 
 uint8_t *gzip_compress(const uint8_t *src, size_t n, size_t *out_len) {
     size_t raw_len;
@@ -436,7 +436,7 @@ static size_t gzip_header_end(const uint8_t *d, size_t n) {
 }
 
 uint8_t *gzip_decompress(const uint8_t *src, size_t n, size_t *out_len) {
-    if (!gzip_is(src, n)) die("不是 gzip 数据");
+    if (!gzip_is(src, n)) die("not gzip data");
     size_t start = gzip_header_end(src, n);
     size_t end = n > 8 ? n - 8 : start;
     if (end < start) end = start;

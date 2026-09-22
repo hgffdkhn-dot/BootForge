@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ------------------------------------------------------ 块级：解码 */
+/* --------------------------------------------- block level: decode */
 
 #define MIN_MATCH 4
 
@@ -47,7 +47,7 @@ uint8_t *lz4_decompress_block(const uint8_t *src, size_t src_len, size_t *out_le
             memcpy(out + len, out + start, mlen);
             len += mlen;
         } else {
-            /* 重叠：逐字节复制 */
+            /* overlapping: copy byte by byte */
             for (size_t k = 0; k < mlen; k++) out[len + k] = out[start + k];
             len += mlen;
         }
@@ -56,7 +56,7 @@ uint8_t *lz4_decompress_block(const uint8_t *src, size_t src_len, size_t *out_le
     return out;
 }
 
-/* ------------------------------------------------------ 块级：编码 */
+/* --------------------------------------------- block level: encode */
 
 #define MFLIMIT 12
 #define MAX_DISTANCE 65535
@@ -78,7 +78,7 @@ uint8_t *lz4_compress_block(const uint8_t *src, size_t src_len, size_t *out_len)
     buf_t b;
     buf_init(&b, src_len / 2 + 64);
 
-    /* 表存 pos+1，0 表示空 */
+    /* table stores pos+1; 0 means empty */
     uint32_t *table = xmalloc(LZ4_HASH_SIZE * sizeof(uint32_t));
     memset(table, 0, LZ4_HASH_SIZE * sizeof(uint32_t));
 
@@ -120,7 +120,7 @@ uint8_t *lz4_compress_block(const uint8_t *src, size_t src_len, size_t *out_len)
     return b.data;
 }
 
-/* ------------------------------------------------------ 容器 */
+/* ------------------------------------------------------ containers */
 
 #define LZ4_BLOCK (1u << 20)
 #define LEGACY_MAGIC 0x184C2102u

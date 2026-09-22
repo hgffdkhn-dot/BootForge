@@ -11,7 +11,7 @@ void die(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     fflush(stdout);
-    fprintf(stderr, "错误: ");
+    fprintf(stderr, "error: ");
     vfprintf(stderr, fmt, ap);
     fprintf(stderr, "\n");
     va_end(ap);
@@ -20,13 +20,13 @@ void die(const char *fmt, ...) {
 
 void *xmalloc(size_t n) {
     void *p = malloc(n ? n : 1);
-    if (!p) die("内存不足（需要 %zu 字节）", n);
+    if (!p) die("out of memory (need %zu bytes)", n);
     return p;
 }
 
 void *xrealloc(void *p, size_t n) {
     void *q = realloc(p, n ? n : 1);
-    if (!q) die("内存不足（扩容到 %zu 字节）", n);
+    if (!q) die("out of memory (grow to %zu bytes)", n);
     return q;
 }
 
@@ -56,7 +56,7 @@ void wr64(uint8_t *p, uint64_t v) {
     for (int i = 0; i < 8; i++) p[i] = (uint8_t)((v >> (8 * i)) & 0xFF);
 }
 
-/* ------------------------------------------------------------ buf_t */
+/* ----------------------------------------------------------- buf_t */
 
 void buf_init(buf_t *b, size_t cap) {
     b->cap = cap ? cap : 256;
@@ -90,7 +90,7 @@ void buf_append(buf_t *b, const void *p, size_t n) {
     b->len += n;
 }
 
-/* ------------------------------------------------------------ 文件 IO */
+/* --------------------------------------------------------- file I/O */
 
 uint8_t *read_file(const char *path, size_t *out_len) {
     FILE *f = fopen(path, "rb");
@@ -136,7 +136,7 @@ int mkdir_p(const char *path) {
     return 0;
 }
 
-/* ------------------------------------------------------------ SHA-1 */
+/* ----------------------------------------------------------- SHA-1 */
 
 #define ROTL(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
 
@@ -218,15 +218,15 @@ void sha1_bytes(const void *data, size_t len, uint8_t out[20]) {
     sha1_final(&c, out);
 }
 
-/* ------------------------------------------------------------ 格式 */
+/* --------------------------------------------------------- formats */
 
 const char *fmt_name(fmt_t f) {
     switch (f) {
         case FMT_GZIP: return "gzip";
         case FMT_LZ4: return "lz4 (legacy)";
         case FMT_LZ4_FRAME: return "lz4 (frame)";
-        case FMT_NONE: return "不压缩";
-        default: return "跟随原镜像";
+        case FMT_NONE: return "none";
+        default: return "auto (follow source)";
     }
 }
 
@@ -240,8 +240,8 @@ fmt_t fmt_detect(const uint8_t *d, size_t n) {
     if (d[0] == 0x1F && d[1] == 0x8B) return FMT_GZIP;
     if (d[0] == 0x02 && d[1] == 0x21 && d[2] == 0x4C && d[3] == 0x18) return FMT_LZ4;
     if (d[0] == 0x04 && d[1] == 0x22 && d[2] == 0x4D && d[3] == 0x18) return FMT_LZ4_FRAME;
-    if (d[0] == 0xFD && d[1] == 0x37) die("xz 压缩暂不支持重新打包");
-    if (d[0] == 0x42 && d[1] == 0x5A && d[2] == 0x68) die("bzip2 压缩暂不支持重新打包");
+    if (d[0] == 0xFD && d[1] == 0x37) die("xz compression is not supported for repacking");
+    if (d[0] == 0x42 && d[1] == 0x5A && d[2] == 0x68) die("bzip2 compression is not supported for repacking");
     if (cpio_is_magic(d, n)) return FMT_NONE;
     return FMT_NONE;
 }

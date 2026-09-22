@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成一个合法的 boot.img（header v3，gzip ramdisk）供测试用。"""
+"""Generate a valid boot.img (header v3, gzip ramdisk) for testing."""
 import gzip
 import struct
 import sys
@@ -31,15 +31,15 @@ def cpio_entry(name, mode, data=b"", nlink=1):
 
 def build_cpio():
     out = b""
-    # 目录
+    # directories
     for d in ["", "system", "system/bin", "proc", "sys"]:
         if d:
             out += cpio_entry(d, 0o040755, b"", nlink=2)
-    # 文件
+    # files
     out += cpio_entry("init", 0o100755, b"#!/system/bin/sh\n# fake init\n")
     out += cpio_entry("system/bin/sh", 0o100755, b"fake shell\n")
     out += cpio_entry("default.prop", 0o100644, b"ro.debuggable=0\nro.secure=1\n")
-    # 带 dm-verity 的 fstab（patch 命令要处理它）
+    # fstab with dm-verity flags (the patch command must process it)
     fstab = (
         "# comment\n"
         "/dev/block/sda1 /system ext4 ro,barrier=1,verify,avb wait,verify\n"
@@ -47,7 +47,7 @@ def build_cpio():
         "/dev/block/sda3 /data  f2fs nosuid,nodev,forceencrypt wait,check\n"
     )
     out += cpio_entry("fstab.test", 0o100644, fstab.encode())
-    # 符号链接
+    # symlink
     out += cpio_entry("sbin/sh", 0o120777, b"/system/bin/sh")
     # trailer
     out += cpio_entry("TRAILER!!!", 0)
@@ -68,7 +68,7 @@ def main():
     def align(v):
         return (v + page - 1) // page * page
 
-    # header v3: 1580 字节，然后一页
+    # header v3: 1580 bytes, then one page
     hdr = bytearray(page)
     hdr[0:8] = MAGIC
     struct.pack_into("<I", hdr, 0x08, len(kernel))
@@ -86,7 +86,7 @@ def main():
         f.write(ramdisk)
         f.write(b"\0" * (align(len(ramdisk)) - len(ramdisk)))
 
-    print("生成 %s: kernel=%d ramdisk=%d(压缩) / %d(原始)" %
+    print("generated %s: kernel=%d ramdisk=%d(compressed) / %d(raw)" %
           (path, len(kernel), len(ramdisk), len(ramdisk_raw)))
 
 

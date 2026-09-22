@@ -7,12 +7,12 @@
 
 #define BF_VERSION "1.0.0"
 
-/* ------------------------------------------------------------------ 通用 */
+/* --------------------------------------------------------------- general */
 
 void *xmalloc(size_t n);
 void *xrealloc(void *p, size_t n);
 
-/* 可增长字节缓冲区 */
+/* growable byte buffer */
 typedef struct {
     uint8_t *data;
     size_t len;
@@ -25,7 +25,7 @@ void buf_putc(buf_t *b, int c);
 void buf_append(buf_t *b, const void *p, size_t n);
 void buf_reserve(buf_t *b, size_t extra);
 
-/* 读整个文件；失败返回 NULL 并把大小置 0 */
+/* read a whole file; returns NULL and size 0 on failure */
 uint8_t *read_file(const char *path, size_t *out_len);
 int write_file(const char *path, const void *data, size_t len);
 
@@ -45,11 +45,11 @@ void sha1_bytes(const void *data, size_t len, uint8_t out[20]);
 
 /* ------------------------------------------------------------------- LZ4 */
 
-/* 块级编解码 */
+/* block level codec */
 uint8_t *lz4_decompress_block(const uint8_t *src, size_t src_len, size_t *out_len);
 uint8_t *lz4_compress_block(const uint8_t *src, size_t src_len, size_t *out_len);
 
-/* 容器（legacy frame / standard frame） */
+/* containers (legacy frame / standard frame) */
 uint8_t *lz4_compress_legacy(const uint8_t *src, size_t src_len, size_t *out_len);
 uint8_t *lz4_compress_frame(const uint8_t *src, size_t src_len, size_t *out_len);
 uint8_t *lz4_decompress_legacy(const uint8_t *src, size_t src_len, size_t *out_len);
@@ -71,7 +71,7 @@ typedef struct {
     uint32_t nlink;
     uint32_t mtime;
     uint32_t filesize;
-    uint8_t *data;   /* 文件/plain 链接的内容 */
+    uint8_t *data;   /* content of file / plain symlink target */
 } cpio_entry;
 
 typedef struct {
@@ -94,10 +94,10 @@ void cpio_add_dir(cpio_t *a, const char *path, uint32_t mode);
 #define CPIO_IS_DIR(e)      (((e)->mode & 0170000) == 0040000)
 #define CPIO_IS_SYMLINK(e)  (((e)->mode & 0170000) == 0120000)
 
-/* 把归档解开到目录 */
+/* extract the archive into a directory */
 int cpio_extract(const cpio_t *a, const char *dir);
 
-/* ---------------------------------------------------------- 压缩格式枚举 */
+/* --------------------------------------------------- compression formats */
 
 typedef enum {
     FMT_AUTO = 0,
@@ -148,10 +148,10 @@ typedef struct {
 } vendor_frag;
 
 typedef struct {
-    /* 源：文件映射或已读入内存 */
-    uint8_t *raw;        /* 若非 NULL，表示整份镜像已在内存 */
+    /* source: either mapped in memory or read lazily from disk */
+    uint8_t *raw;        /* non-NULL means the whole image is in memory */
     size_t raw_len;
-    const char *path;    /* 否则按路径惰性读取 */
+    const char *path;    /* otherwise read lazily by path */
 
     int is_vendor;
     int header_version;
@@ -173,31 +173,31 @@ typedef struct {
     uint32_t table_entry_num;
     uint32_t table_entry_size;
 
-    /* 各段 */
+    /* sections */
     uint64_t off[P_COUNT];
     uint64_t size[P_COUNT];
-    uint8_t *override[P_COUNT];      /* 内存覆盖（拥有所有权） */
+    uint8_t *override[P_COUNT];      /* in-memory override (owned) */
     size_t override_len[P_COUNT];
-    char *override_path[P_COUNT];    /* 文件覆盖 */
+    char *override_path[P_COUNT];    /* file-based override */
 
     vendor_frag *frags;
     size_t nfrag;
 } boot_image;
 
-/* 解析 / 释放 */
+/* parse / free */
 int boot_parse(boot_image *img, const char *path);
 void boot_free(boot_image *img);
 int boot_is_vendor(const boot_image *img);
 
-/* 段的当前大小（考虑覆盖） */
+/* current size of a section (overrides included) */
 uint64_t boot_size_of(const boot_image *img, part_t p);
 int boot_has(const boot_image *img, part_t p);
 
-/* 读取某段到内存；小段才用 */
+/* read a section into memory; small sections only */
 uint8_t *boot_read_part(boot_image *img, part_t p, size_t *out_len);
 uint8_t *boot_peek_part(boot_image *img, part_t p, size_t n, size_t *out_len);
 
-void boot_set_part(boot_image *img, part_t p, uint8_t *data, size_t len); /* 接管所有权 */
+void boot_set_part(boot_image *img, part_t p, uint8_t *data, size_t len); /* takes ownership */
 void boot_set_part_file(boot_image *img, part_t p, const char *path);
 
 int boot_load_frags(boot_image *img);

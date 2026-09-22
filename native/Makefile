@@ -1,18 +1,18 @@
-# bootforge — 纯 C 实现，magiskboot 式构建
+# bootforge - pure C, built the magiskboot way
 #
-# 本地构建（PC 上）：
-#   make                 # 用系统 gcc，产出 build/bootforge
-#   make static          # 静态链接（PC 上可用）
+# Local build (PC):
+#   make                 # host gcc, produces build/bootforge
+#   make static          # static linking (works on PC)
 #
-# Android 交叉编译（NDK）：
-#   make android         ANDROID_NDK_HOME=/path/to/ndk   # aarch64 动态链接（推荐）
-#   make android-arm     ANDROID_NDK_HOME=/path/to/ndk   # armv7 动态链接
-#   make android-static  ANDROID_NDK_HOME=/path/to/ndk   # aarch64 静态（部分设备报 TLS 对齐错误）
+# Android cross compilation (NDK):
+#   make android         ANDROID_NDK_HOME=/path/to/ndk   # aarch64 dynamic (recommended)
+#   make android-arm     ANDROID_NDK_HOME=/path/to/ndk   # armv7 dynamic
+#   make android-static  ANDROID_NDK_HOME=/path/to/ndk   # aarch64 static
 #
-# 关于静态链接：Android bionic 要求 arm64 可执行文件的 TLS 段对齐至少 64 字节，
-# 而 lld 对静态可执行文件只给 8，运行时会报：
+# About static linking: Android bionic requires arm64 executables to have a TLS
+# segment aligned to at least 64 bytes, but lld only gives 8 for static execs.
 #   "executable's TLS segment is underaligned: alignment is 8, needs to be at least 64"
-# 动态链接的版本由 /system/bin/linker64 加载，不走这条检查，因此默认用动态链接。
+# Dynamic builds are loaded by /system/bin/linker64 and skip that check, so default to dynamic.
 
 CC      ?= cc
 CFLAGS  ?= -O2 -std=c11 -Wall -Wextra -D_GNU_SOURCE
@@ -39,41 +39,41 @@ $(BUILD)/%.o: src/%.c src/bootforge.h | $(BUILD)
 
 $(TARGET): $(OBJ)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
-	@echo "产物: $@"
+	@echo "output: $@"
 	@file $@ 2>/dev/null || true
 
 static: CFLAGS += -static
 static: LDFLAGS += -static
 static: clean $(TARGET)
 
-# --------------------------------------------------- Android 动态链接（默认推荐）
+# ------------------------------------------ Android dynamic (recommended)
 
 android: CC      := $(NDK_BIN)/aarch64-linux-android$(NDK_API)-clang
 android: CFLAGS  := $(NDK_CFLAGS)
 android: LDFLAGS := -pie
 android: clean $(TARGET)
-	@echo "aarch64 动态二进制: $(TARGET)"
+	@echo "aarch64 dynamic binary: $(TARGET)"
 
 android-arm: CC      := $(NDK_BIN)/armv7a-linux-androideabi$(NDK_API)-clang
 android-arm: CFLAGS  := $(NDK_CFLAGS)
 android-arm: LDFLAGS := -pie
 android-arm: clean $(TARGET)
-	@echo "armv7 动态二进制: $(TARGET)"
+	@echo "armv7 dynamic binary: $(TARGET)"
 
-# --------------------------------------------------- Android 静态链接（可选）
+# --------------------------------------------- Android static (optional)
 
 android-static: CC      := $(NDK_BIN)/aarch64-linux-android$(NDK_API)-clang
 android-static: CFLAGS  := $(NDK_CFLAGS) -static
 android-static: LDFLAGS := -static
 android-static: clean $(TARGET)
-	@echo "aarch64 静态二进制: $(TARGET)（若运行报 TLS 对齐错误，改用动态版）"
+	@echo "aarch64 static binary: $(TARGET) (use dynamic if TLS alignment error)"
 
 android-arm-static: CC      := $(NDK_BIN)/armv7a-linux-androideabi$(NDK_API)-clang
 android-arm-static: CFLAGS  := $(NDK_CFLAGS) -static
 android-arm-static: LDFLAGS := -static
 android-arm-static: clean $(TARGET)
 
-# 一次产出四个 Android 二进制
+# build all four Android binaries at once
 android-all: ANDROID_OUT := $(BUILD)/android
 android-all:
 	@set -e; mkdir -p $(ANDROID_OUT); \
@@ -88,9 +88,9 @@ android-all:
 	done; \
 	ls -lh $(ANDROID_OUT)
 
-# 查看 TLS 段对齐（用于排查上面的 bionic 报错）
+# inspect TLS segment alignment (to debug the bionic error above)
 inspect: $(TARGET)
-	@readelf -l $(TARGET) 2>/dev/null | grep -A1 -i "tls" || echo "无 TLS 段或没有 readelf"
+	@readelf -l $(TARGET) 2>/dev/null | grep -A1 -i "tls" || echo "no TLS segment or readelf missing"
 
 $(BUILD):
 	mkdir -p $(BUILD)

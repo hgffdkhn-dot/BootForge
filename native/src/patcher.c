@@ -4,9 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ------------------------------------------------------------ fstab 修补 */
+/* ------------------------------------------------------- fstab patching */
 
-/* 在 haystack 的前 len 字节里做不区分大小写的子串查找 */
+/* case-insensitive substring search within the first len bytes */
 static const char *memcase(const char *hay, size_t len, const char *needle) {
     size_t nl = strlen(needle);
     if (nl == 0 || len < nl) return NULL;
@@ -32,7 +32,7 @@ static void note(patch_result *r, const char *fmt, ...) {
     r->nnote++;
 }
 
-/* 去掉一个挂载选项；返回新分配的字符串 */
+/* remove one mount option; returns a newly allocated string */
 static char *strip_opt(const char *opts, const char *key) {
     size_t olen = strlen(opts), klen = strlen(key);
     char *out = xmalloc(olen + 1);
@@ -110,13 +110,13 @@ patch_result fstab_patch(cpio_t *a, int keep_verity, int keep_forceencrypt) {
             char out_line[4096];
             snprintf(out_line, sizeof(out_line), "%s", line);
 
-            /* 只处理非注释的挂载行 */
+            /* only handle non-comment mount lines */
             const char *trimmed = line;
             while (*trimmed == ' ' || *trimmed == '\t') trimmed++;
             int is_mount = (*trimmed && *trimmed != '#');
 
             if (is_mount) {
-                /* 拆分：dev mountpoint type opts rest */
+                /* split into: dev mountpoint type opts rest */
                 char dev[256] = {0}, mnt[256] = {0}, fstype[64] = {0}, opts[1024] = {0}, rest[512] = {0};
                 int n = sscanf(line, "%255s %255s %63s %1023s %511[^\n]",
                                dev, mnt, fstype, opts, rest);
@@ -180,7 +180,7 @@ patch_result fstab_patch(cpio_t *a, int keep_verity, int keep_forceencrypt) {
             e->data[nb.len] = 0;
             e->filesize = (uint32_t)nb.len;
             r.files++;
-            note(&r, "修补 %s", e->name);
+            note(&r, "patched %s", e->name);
         }
         buf_free(&nb);
     }
@@ -188,7 +188,7 @@ patch_result fstab_patch(cpio_t *a, int keep_verity, int keep_forceencrypt) {
     return r;
 }
 
-/* ------------------------------------------------------------ cmdline */
+/* ------------------------------------------------------------- cmdline */
 
 int fstab_append_cmdline(boot_image *img, const char *extra) {
     if (!extra || !*extra) return 0;

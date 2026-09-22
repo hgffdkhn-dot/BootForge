@@ -235,7 +235,7 @@ void cpio_add(cpio_t *a, const char *path, const uint8_t *data, size_t len, uint
     a->v[a->n++] = e;
 }
 
-/* ------------------------------------------------------------ 解开到磁盘 */
+/* --------------------------------------------- extract to disk */
 
 static char *path_join(const char *dir, const char *name) {
     size_t a = strlen(dir), b = strlen(name);
