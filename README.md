@@ -53,12 +53,60 @@ gradle :app:assembleDebug
 
 产物：`app/build/outputs/apk/debug/app-debug.apk`。
 
+## 命令行工具 bootforge（CLI）
+
+`core/` 与 `cli/` 组成了一个 **Kotlin/Native 静态二进制**，用法对齐 magiskboot：
+
+```bash
+bootforge info   boot.img                       # 分析头部 / 各段 / cmdline / 补丁级别
+bootforge unpack boot.img -o boot_out           # 解出 kernel、ramdisk（含展开的文件树）、dtb 等
+bootforge repack boot.img -o new.img --lz4      # 重新打包，可换压缩格式、补 cmdline
+bootforge inject boot.img -o new.img mytool=system/bin/mytool:0755
+bootforge patch  boot.img -o new.img            # 去掉 dm-verity / 强制加密
+```
+
+特点：
+
+- **零依赖静态链接**，`-static` 编译，Android（bionic）上 `adb push` 后可直接执行，不需要 Termux 或任何运行时。
+- 全部算法自实现：LZ4、GZIP/DEFLATE、SHA-1、cpio，不链接 zlib，也不依赖 `java.*`。
+- 镜像按 offset+size 惰性读取，100 MB 的 boot.img 也不会把内存吃满。
+
+### 获取二进制
+
+推到 GitHub 后，Actions 会产出两个 artifact：
+
+- `bootforge-linux-x86_64`（x64 Linux 主机）
+- `bootforge-linux-aarch64`（aarch64，手机直接跑；在 QEMU + arm64 容器里原生编译）
+
+下载后：
+
+```bash
+chmod +x bootforge-linux-aarch64
+adb push bootforge-linux-aarch64 /data/local/tmp/bootforge
+adb shell chmod 755 /data/local/tmp/bootforge
+adb shell /data/local/tmp/bootforge info /dev/block/by-name/boot   # 或先 dd 出镜像
+```
+
+> 若静态链接在你的环境失败，删掉 `cli/build.gradle.kts` 里的 `linkerOpts("-static")` 即可退回动态链接（PC 上可用，但手机上就不能直接跑了）。
+
 ## 目录结构
 
 ```
+core/                          # Kotlin Multiplatform：CLI 与（未来）App 共用的实现
+├── src/commonMain/.../core/   # 纯 Kotlin，无 java.* 依赖
+│   ├── BootImage.kt           # boot / vendor_boot 解析与重建（v0–v4）
+│   ├── Lz4.kt / Gzip.kt       # 自实现的压缩编解码
+│   ├── Sha1.kt / Cpio.kt      # 自实现的哈希与 cpio newc
+│   └── Io.kt                  # expect/actual：JVM 用 java.io，Native 用 POSIX
+├── src/nativeMain/.../Io.native.kt
+└── src/jvmMain/.../Io.jvm.kt
+
+cli/                           # Kotlin/Native 可执行文件
+└── src/nativeMain/.../Main.kt # 命令行入口（info / unpack / repack / inject / patch）
+
 app/src/main/java/com/bootforge/
 ├── BootForgeApp.kt            # 应用入口，启用 Material You 动态取色
-├── core/
+├── core/                      # Android 侧的等价实现（与 core/ 同逻辑，暂未合并）
 │   ├── BootImage.kt           # boot / vendor_boot 解析与重建（v0–v4）
 │   ├── Cpio.kt                # cpio newc 归档读写
 │   ├── Lz4.kt                 # LZ4 块编解码 + legacy / 标准帧容器

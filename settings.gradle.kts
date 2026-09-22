@@ -16,3 +16,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "BootForge"
 include(":app")
+include(":core")
+include(":cli")

@@ -1,4 +1,4 @@
-name: Build APK
+name: Build
 
 on:
   push:
@@ -8,19 +8,16 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Assemble APK
+  apk:
+    name: Android APK
     runs-on: ubuntu-latest
     env:
-      # ubuntu-latest 镜像已内置 Android SDK（含 licenses 与 build-tools）
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: "17"
           distribution: "temurin"
@@ -32,8 +29,6 @@ jobs:
           mkdir -p "$ANDROID_HOME/licenses"
           printf '\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n' > "$ANDROID_HOME/licenses/android-sdk-license"
           printf '\n84831b9409646a918e30573bab4c9c91346d8abd\n' > "$ANDROID_HOME/licenses/android-sdk-preview-license"
-          ls -1 "$ANDROID_HOME/licenses"
-          ls -1 "$ANDROID_HOME" | head -20
 
       - name: Install Gradle 8.9
         run: |
@@ -43,17 +38,15 @@ jobs:
             sudo unzip -q /tmp/gradle.zip -d /opt
           fi
           sudo ln -sf /opt/gradle-8.9/bin/gradle /usr/local/bin/gradle
-          gradle --version | head -5
+          gradle --version | head -3
 
-      - name: Assemble Debug
-        run: /opt/gradle-8.9/bin/gradle --no-daemon --stacktrace :app:assembleDebug
-
-      - name: Assemble Release
-        run: /opt/gradle-8.9/bin/gradle --no-daemon --stacktrace :app:assembleRelease
-
-      - name: Collect artifacts
+      - name: Assemble
         run: |
-          set -e
+          /opt/gradle-8.9/bin/gradle --no-daemon --stacktrace :app:assembleDebug
+          /opt/gradle-8.9/bin/gradle --no-daemon --stacktrace :app:assembleRelease
+
+      - name: Collect
+        run: |
           mkdir -p artifacts
           cp app/build/outputs/apk/debug/app-debug.apk artifacts/BootForge-debug.apk
           if [ -f app/build/outputs/apk/release/app-release-unsigned.apk ]; then
@@ -61,58 +54,115 @@ jobs:
           else
             cp app/build/outputs/apk/release/app-release.apk artifacts/BootForge-release.apk
           fi
-          ls -lh artifacts
 
-      - name: Optional release signing
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: |
-          set -e
-          if [ -z "${KEYSTORE_BASE64:-}" ]; then
-            echo "未配置签名密钥（KEYSTORE_BASE64），跳过签名步骤"
-            exit 0
-          fi
-          echo "$KEYSTORE_BASE64" | base64 -d > /tmp/bootforge.jks
-          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner 2>/dev/null | sort | tail -1 || true)
-          if [ -z "$APKSIGNER" ]; then
-            echo "未找到 apksigner，跳过签名"
-          else
-            SRC=$(ls artifacts/BootForge-release*.apk | head -1)
-            "$APKSIGNER" sign --ks /tmp/bootforge.jks \
-              --ks-pass "pass:$KEYSTORE_PASSWORD" \
-              --key-pass "pass:$KEY_PASSWORD" \
-              --ks-key-alias "$KEY_ALIAS" \
-              --out artifacts/BootForge-release-signed.apk "$SRC"
-            rm -f "$SRC"
-          fi
-          rm -f /tmp/bootforge.jks
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: BootForge-apk
           path: artifacts/*
           if-no-files-found: error
 
+  cli-x64:
+    name: CLI (linux-x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: gradle
+
+      - name: Install Gradle 8.9
+        run: |
+          set -e
+          if [ ! -x /opt/gradle-8.9/bin/gradle ]; then
+            curl -fsSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.9-bin.zip
+            sudo unzip -q /tmp/gradle.zip -d /opt
+          fi
+          sudo ln -sf /opt/gradle-8.9/bin/gradle /usr/local/bin/gradle
+
+      - name: Build static binary
+        run: /opt/gradle-8.9/bin/gradle --no-daemon --stacktrace :cli:linkBootforgeReleaseExecutableLinuxX64
+
+      - name: Collect
+        run: |
+          mkdir -p artifacts
+          BIN=$(find cli/build -type f -name 'bootforge.kexe' | head -1)
+          if [ -z "$BIN" ]; then
+            echo "未找到产物"; find cli/build -maxdepth 4 -type f | head -40; exit 1
+          fi
+          cp "$BIN" artifacts/bootforge-linux-x86_64
+          chmod +x artifacts/bootforge-linux-x86_64
+          file artifacts/bootforge-linux-x86_64 || true
+          ls -lh artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bootforge-linux-x86_64
+          path: artifacts/*
+          if-no-files-found: error
+
+  cli-arm64:
+    name: CLI (linux-aarch64 / Android)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user-static
+          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes || true
+
+      - name: Build inside an aarch64 container
+        run: |
+          set -e
+          docker run --rm --platform linux/arm64 -v "$PWD":/src -w /src arm64v8/ubuntu:22.04 bash -lc '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y -qq openjdk-17-jdk-headless unzip curl ca-certificates libc6-dev
+            if [ ! -x /opt/gradle-8.9/bin/gradle ]; then
+              curl -fsSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.9-bin.zip
+              unzip -q /tmp/gradle.zip -d /opt
+            fi
+            GRADLE=/opt/gradle-8.9/bin/gradle
+            $GRADLE --no-daemon --stacktrace :cli:linkBootforgeReleaseExecutableLinuxArm64
+          '
+
+      - name: Collect
+        run: |
+          set -e
+          mkdir -p artifacts
+          BIN=$(find cli/build -type f -name 'bootforge.kexe' | head -1)
+          if [ -z "$BIN" ]; then
+            echo "未找到产物"; find cli/build -maxdepth 4 -type f | head -40; exit 1
+          fi
+          cp "$BIN" artifacts/bootforge-linux-aarch64
+          chmod +x artifacts/bootforge-linux-aarch64
+          ls -lh artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bootforge-linux-aarch64
+          path: artifacts/*
+          if-no-files-found: error
+
   release:
     name: Publish release
-    needs: build
+    needs: [apk, cli-x64]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: BootForge-apk
           path: artifacts
+          merge-multiple: true
 
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
           generate_release_notes: true

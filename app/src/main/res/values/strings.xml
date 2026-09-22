@@ -34,6 +34,10 @@
     <string name="clear">清空</string>
     <string name="inject_and_pack">注入并重新打包</string>
     <string name="ramdisk_files">ramdisk 文件</string>
+    <string name="expand_list">展开列表</string>
+    <string name="collapse_list">收起列表</string>
+    <string name="load_more">加载更多（还有 %1$d 条）</string>
+    <string name="no_more">已全部显示</string>
     <string name="filter_hint">按名称过滤</string>
     <string name="filter">过滤</string>
     <string name="target_path_hint">目标路径</string>

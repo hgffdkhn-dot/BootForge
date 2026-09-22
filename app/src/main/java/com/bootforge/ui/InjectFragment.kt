@@ -30,8 +30,12 @@ class InjectFragment : Fragment() {
     private var allEntries: List<RamdiskRow> = emptyList()
     private var nextId = 1L
 
+    /** 列表默认折叠、展开后分页渲染，避免上万条目一次性 layout 造成跳转卡顿。 */
+    private var expanded = false
+    private var shown = PAGE_SIZE
+
     private companion object {
-        const val MAX_ROWS = 300
+        const val PAGE_SIZE = 50
     }
 
     private val pickFiles = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -98,13 +102,19 @@ class InjectFragment : Fragment() {
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
         }
         binding.etFilter.setOnEditorActionListener { _, _, _ -> applyFilter(); true }
-        binding.btnFilter.setOnClickListener { applyFilter() }
+        binding.btnFilter.setOnClickListener {
+            shown = PAGE_SIZE
+            applyFilter()
+        }
+        binding.btnToggleList.setOnClickListener { toggleList() }
+        binding.btnLoadMore.setOnClickListener {
+            shown += PAGE_SIZE
+            applyFilter()
+        }
 
         vm.ramdiskRows.observe(viewLifecycleOwner) { entries ->
             allEntries = entries
             applyFilter()
-            binding.tvNotice.visibility =
-                if (entries.isEmpty() && vm.ramdiskRowCount() == 0 && vm.hasImage()) View.VISIBLE else View.GONE
         }
         vm.busy.observe(viewLifecycleOwner) { busy ->
             binding.progress.visibility = if (busy) View.VISIBLE else View.GONE
@@ -120,23 +130,48 @@ class InjectFragment : Fragment() {
         vm.status.observe(viewLifecycleOwner) { binding.tvStatus.text = it }
     }
 
+    /** 折叠状态下完全不提交数据，保证页面切换瞬间完成。 */
     private fun applyFilter() {
+        val total = vm.ramdiskRowCount()
         val query = binding.etFilter.text.toString().trim()
-        val list = if (query.isEmpty()) {
+        val matched: List<RamdiskRow> = if (query.isEmpty()) {
             allEntries
         } else {
-            // 只渲染前 MAX_ROWS 条命中项
-            allEntries.asSequence().filter { it.name.contains(query, true) }.take(MAX_ROWS).toList()
+            allEntries.filter { it.name.contains(query, true) }
         }
-        ramdiskAdapter.submit(list)
-        val total = vm.ramdiskRowCount()
         binding.tvRamdiskCount.text = buildString {
             append("ramdisk 文件：")
-            append(list.size)
+            append(matched.size)
             append(" / ")
             append(total)
-            if (total > allEntries.size) append("（已按上限显示）")
         }
+        // 已导入镜像但列表为空：说明 ramdisk 过大被跳过解析，给出解释
+        binding.tvNotice.visibility =
+            if (allEntries.isEmpty() && total == 0 && vm.hasImage()) View.VISIBLE else View.GONE
+
+        if (!expanded) {
+            binding.rvRamdisk.visibility = View.GONE
+            binding.btnLoadMore.visibility = View.GONE
+            binding.btnToggleList.contentDescription = getString(R.string.expand_list)
+            return
+        }
+
+        binding.rvRamdisk.visibility = View.VISIBLE
+        val page = matched.take(shown)
+        ramdiskAdapter.submit(page)
+        val rest = matched.size - page.size
+        binding.btnLoadMore.apply {
+            visibility = View.VISIBLE
+            text = if (rest > 0) getString(R.string.load_more, rest) else getString(R.string.no_more)
+            isEnabled = rest > 0
+        }
+        binding.btnToggleList.contentDescription = getString(R.string.collapse_list)
+    }
+
+    private fun toggleList() {
+        expanded = !expanded
+        if (expanded) shown = PAGE_SIZE
+        applyFilter()
     }
 
     private fun nameOf(uri: android.net.Uri): String {
